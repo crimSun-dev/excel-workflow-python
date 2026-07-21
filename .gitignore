@@ -1,0 +1,26 @@
+# AI assistant and planning metadata
+.claude/
+.cursor/
+.agent/
+.gemini/
+openspec/
+
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Build outputs and generated reports
+build/
+dist/
+*.xlsx
+
+# Local tooling and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Packaged source archives
+excel-workflow-python.zip
