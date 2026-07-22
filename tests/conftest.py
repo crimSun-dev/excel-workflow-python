@@ -77,3 +77,132 @@ def reference_file(tmp_path: Path) -> Path:
     path = tmp_path / "reference.xlsx"
     ref.to_excel(path, index=False)
     return path
+
+
+@pytest.fixture
+def reference_file_kanca(tmp_path: Path) -> Path:
+    """Reference workbook using aliased headers instead of canonical names.
+
+    KANCA -> KODE_UKER, UNIQUE CODE -> MAIN_CODE, DESCRIPTION -> MAIN_BRANCH.
+    0003 is intentionally omitted to exercise the UNMAPPED path.
+    """
+    ref = pd.DataFrame(
+        {
+            "KANCA": ["0001", "0002"],
+            "UNIQUE CODE": ["MC10", "MC20"],
+            "DESCRIPTION": ["Jakarta Pusat", "Surabaya"],
+        }
+    )
+    path = tmp_path / "reference_kanca.xlsx"
+    ref.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
+def reference_file_multisheet(tmp_path: Path) -> Path:
+    """Multi-sheet workbook where the mapping table is not on the first sheet."""
+    decoy = pd.DataFrame(
+        {
+            "ACCOUNT NUMBER": ["100", "200"],
+            "PRODUK": ["A", "B"],
+        }
+    )
+    mapping = pd.DataFrame(
+        {
+            "KANCA": ["0001", "0002"],
+            "UNIQUE CODE": ["MC10", "MC20"],
+            "DESCRIPTION": ["Jakarta Pusat", "Surabaya"],
+        }
+    )
+    path = tmp_path / "reference_multisheet.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        decoy.to_excel(writer, sheet_name="Cover", index=False)
+        mapping.to_excel(writer, sheet_name="Mapping", index=False)
+    return path
+
+
+@pytest.fixture
+def reference_file_unit_kerja(tmp_path: Path) -> Path:
+    """Reference workbook matching BRIEFX 'Unit Kerja' / UKER sheet layout."""
+    ref = pd.DataFrame(
+        {
+            "KODE SUB KANCA": ["0001", "0002"],
+            "SUB KANCA": ["Unit A", "Unit B"],
+            "KODE KANCA": ["MC10", "MC20"],
+            "KANCA": ["0001", "0002"],
+            "KANWIL": ["JW1", "JW1"],
+            "KODE": ["MC10", "MC20"],
+        }
+    )
+    path = tmp_path / "reference_unit_kerja.xlsx"
+    ref.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
+def reference_file_uker_new(tmp_path: Path) -> Path:
+    """Reference workbook matching BRIEFX 'UKER NEW' sheet layout."""
+    ref = pd.DataFrame(
+        {
+            "KODE UNIT": ["0001", "0002"],
+            "DESC UNIT": ["Unit A", "Unit B"],
+            "KODE KANCA": ["MC10", "MC20"],
+            "DESC KANCA": ["Jakarta Pusat", "Surabaya"],
+        }
+    )
+    path = tmp_path / "reference_uker_new.xlsx"
+    ref.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
+def reference_file_briefx_multisheet(tmp_path: Path) -> Path:
+    """Multi-sheet workbook like the real BRIEFX file (GL + Unit Kerja + UKER NEW)."""
+    gl_sheet = pd.DataFrame(
+        {
+            "ACCOUNT NUMBER": ["100", "200"],
+            "DESCRIPTION": ["GL A", "GL B"],
+            "C/C": ["x", "y"],
+            "UNIQUE CODE": ["U1", "U2"],
+            "PRODUK": ["P1", "P2"],
+        }
+    )
+    unit_kerja = pd.DataFrame(
+        {
+            "KODE SUB KANCA": ["0001", "0002"],
+            "SUB KANCA": ["Wrong A", "Wrong B"],
+            "KODE KANCA": ["WRONG", "WRONG"],
+            "KANCA": ["0001", "0002"],
+            "KANWIL": ["JW1", "JW1"],
+            "KODE": ["WRONG", "WRONG"],
+        }
+    )
+    uker_sheet = pd.DataFrame(
+        {
+            "KODE UNIT": ["0001", "0002"],
+            "DESC UNIT": ["Unit A", "Unit B"],
+            "KODE KANCA": ["MC10", "MC20"],
+            "DESC KANCA": ["Jakarta Pusat", "Surabaya"],
+        }
+    )
+    path = tmp_path / "reference_briefx.xlsx"
+    with pd.ExcelWriter(path) as writer:
+        gl_sheet.to_excel(writer, sheet_name="Mapping GL FBI INT", index=False)
+        unit_kerja.to_excel(writer, sheet_name="Unit Kerja", index=False)
+        uker_sheet.to_excel(writer, sheet_name="UKER NEW 2025 (KC BATU)", index=False)
+    return path
+
+
+@pytest.fixture
+def reference_file_unresolvable(tmp_path: Path) -> Path:
+    """Reference workbook with no column resolvable to the required logical columns."""
+    ref = pd.DataFrame(
+        {
+            "ACCOUNT NUMBER": ["100", "200"],
+            "PRODUK": ["A", "B"],
+            "C/C": ["x", "y"],
+        }
+    )
+    path = tmp_path / "reference_unresolvable.xlsx"
+    ref.to_excel(path, index=False)
+    return path

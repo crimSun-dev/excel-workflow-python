@@ -87,6 +87,78 @@ def test_enrichment_missing_reference_file_raises(tmp_path, raw_pipe_file):
         ReferenceEnricher(tmp_path / "nope.xlsx").enrich(raw)
 
 
+def test_enrichment_resolves_kanca_and_output_aliases(raw_pipe_file, reference_file_kanca):
+    raw = IngestionEngine().read_raw_data(raw_pipe_file).data
+    result = ReferenceEnricher(reference_file_kanca).enrich(raw)
+    row = result.data[result.data["KODE_UKER"] == "0001"].iloc[0]
+    assert row["MAIN_CODE"] == "MC10"
+    assert row["MAIN_BRANCH"] == "Jakarta Pusat"
+    assert result.matched_count == 3
+    assert result.unmapped_count == 1  # 0003 not in reference
+
+
+def test_enrichment_scans_non_default_sheet(raw_pipe_file, reference_file_multisheet):
+    raw = IngestionEngine().read_raw_data(raw_pipe_file).data
+    result = ReferenceEnricher(reference_file_multisheet).enrich(raw)
+    row = result.data[result.data["KODE_UKER"] == "0002"].iloc[0]
+    assert row["MAIN_CODE"] == "MC20"
+    assert row["MAIN_BRANCH"] == "Surabaya"
+    assert result.matched_count == 3
+
+
+def test_enrichment_canonical_reference_unchanged(raw_pipe_file, reference_file):
+    """Regression: canonical KODE_UKER reference files behave identically."""
+    raw = IngestionEngine().read_raw_data(raw_pipe_file).data
+    result = ReferenceEnricher(reference_file).enrich(raw)
+    row = result.data[result.data["KODE_UKER"] == "0001"].iloc[0]
+    assert row["MAIN_CODE"] == "MC10"
+    assert row["MAIN_BRANCH"] == "Jakarta Pusat"
+    assert result.matched_count == 3
+    assert result.unmapped_count == 1
+
+
+def test_enrichment_resolves_unit_kerja_sheet(raw_pipe_file, reference_file_unit_kerja):
+    raw = IngestionEngine().read_raw_data(raw_pipe_file).data
+    result = ReferenceEnricher(reference_file_unit_kerja).enrich(raw)
+    row = result.data[result.data["KODE_UKER"] == "0001"].iloc[0]
+    assert row["MAIN_CODE"] == "MC10"
+    assert row["MAIN_BRANCH"] == "Unit A"
+    assert result.matched_count == 3
+
+
+def test_enrichment_resolves_uker_new_sheet(raw_pipe_file, reference_file_uker_new):
+    raw = IngestionEngine().read_raw_data(raw_pipe_file).data
+    result = ReferenceEnricher(reference_file_uker_new).enrich(raw)
+    row = result.data[result.data["KODE_UKER"] == "0001"].iloc[0]
+    assert row["MAIN_CODE"] == "MC10"
+    assert row["MAIN_BRANCH"] == "Jakarta Pusat"
+    assert result.matched_count == 3
+
+
+def test_enrichment_skips_gl_sheet_and_uses_uker_tab(
+    raw_pipe_file, reference_file_briefx_multisheet
+):
+    raw = IngestionEngine().read_raw_data(raw_pipe_file).data
+    result = ReferenceEnricher(reference_file_briefx_multisheet).enrich(raw)
+    row = result.data[result.data["KODE_UKER"] == "0002"].iloc[0]
+    assert row["MAIN_CODE"] == "MC20"
+    assert row["MAIN_BRANCH"] == "Surabaya"
+    assert result.matched_count == 3
+
+
+def test_enrichment_unresolvable_reference_raises_with_detail(
+    raw_pipe_file, reference_file_unresolvable
+):
+    raw = IngestionEngine().read_raw_data(raw_pipe_file).data
+    with pytest.raises(ReferenceEnrichmentError) as excinfo:
+        ReferenceEnricher(reference_file_unresolvable).enrich(raw)
+    message = str(excinfo.value)
+    assert "Sheets scanned" in message
+    assert "Aliases attempted" in message
+    assert "ACCOUNT NUMBER" in message  # columns found are surfaced
+    assert "KANCA" in message  # aliases attempted are surfaced
+
+
 # --------------------------------------------------------------------------- #
 # Aggregation
 # --------------------------------------------------------------------------- #

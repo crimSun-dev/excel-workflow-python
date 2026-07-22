@@ -15,6 +15,13 @@ which itself automates the manual process described in
 Double-click **`Run Excel Workflow.bat`**. The launcher automatically creates
 the Python environment, installs missing packages, and opens the GUI.
 
+**Requirements:** Python **3.10–3.13** (64-bit, standard build). Avoid the
+experimental **free-threaded** Python installer — it has no pre-built `pandas`
+wheels on Windows and will fail with a Visual Studio / `vswhere.exe` error.
+If setup fails on another PC, install [Python 3.12](https://www.python.org/downloads/),
+delete the `.venv` folder, and run the batch file again. Or use the standalone
+`.exe` build below (no Python required).
+
 ## What it does
 
 | Manual Excel step | Automated equivalent | Module |
@@ -72,9 +79,22 @@ KODE_UKER|SEGMEN|VOLUME_IN_IDR
 0002|Corporate|500000000.50
 ```
 
-Reference workbook (`reference.xlsx`) must contain the columns
-`KODE_UKER`, `MAIN_CODE`, `MAIN_BRANCH`. Codes missing from the reference are
-grouped under an explicit `UNMAPPED` branch and reported (never abort the run).
+Reference workbook (`reference.xlsx`) must contain a lookup key column plus a
+code/branch pair. Canonical headers are `KODE_UKER`, `MAIN_CODE`, `MAIN_BRANCH`,
+but common alternate names are resolved automatically (case-insensitive, first
+match wins):
+
+| Logical column | Accepted headers |
+|---|---|
+| Lookup key (`KODE_UKER`) | `KODE_UKER`, `KODE UNIT`, `KANCA`, `KODE SUB KANCA`, `KODE KANCA`, `UKER`, `KODE UKER` |
+| `MAIN_CODE` | `MAIN_CODE`, `MAIN CODE`, `KODE`, `KODE KANCA`, `KODE UNIT`, `UNIQUE CODE`, `KODE INDUK` |
+| `MAIN_BRANCH` | `MAIN_BRANCH`, `MAIN BRANCH`, `BRANCH`, `DESC KANCA`, `DESC UNIT`, `SUB KANCA`, `NAMA UKER`, `DESCRIPTION` |
+
+For multi-sheet `.xlsx` workbooks, every sheet is scanned and the first sheet
+whose columns resolve to all three logical columns is used. If no sheet
+resolves, the error lists the sheets scanned, columns found, and aliases tried.
+Codes missing from the reference are grouped under an explicit `UNMAPPED` branch
+and reported (never abort the run).
 
 ## Tests
 
@@ -82,8 +102,9 @@ grouped under an explicit `UNMAPPED` branch and reported (never abort the run).
 python -m pytest
 ```
 
-22 tests cover ingestion (encoding fallback, whitespace, malformed rows),
-enrichment (matching, unmapped flagging, error handling), aggregation
+26 tests cover ingestion (encoding fallback, whitespace, malformed rows),
+enrichment (matching, unmapped flagging, column-alias/multi-sheet resolution,
+error handling), aggregation
 (grouping, decimal precision, segment filter), Excel export (sheets, number
 format, Grand Total, column widths), and full end-to-end pipeline runs.
 
