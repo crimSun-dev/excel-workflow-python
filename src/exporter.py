@@ -101,6 +101,57 @@ class ExcelReportExporter:
         enriched_ws = workbook.create_sheet(self.detail_sheet_name)
         self._write_enriched_sheet(enriched_ws, enriched_df)
 
+        self._save(workbook, output_path)
+        return output_path
+
+    def export_crosstab(
+        self,
+        crosstab_df: pd.DataFrame,
+        detail_df: pd.DataFrame,
+        output_path: Path,
+        row_label_header: str,
+        category_columns: list[str],
+        total_records: int,
+        filter_applied: str | None = None,
+    ) -> Path:
+        """Writes a Count-style crosstab Summary_Report plus a detail sheet.
+
+        Used only by the Qlola workflow. `crosstab_df` is a tidy frame whose
+        first column is the row-label key and whose `category_columns` hold the
+        per-category counts; this writer appends a Grand Total column and row.
+
+        Args:
+            crosstab_df: Columns [row_label_header, *category_columns] of counts.
+            detail_df: Row-level frame for the audit/detail sheet.
+            output_path: Destination path for the .xlsx file.
+            row_label_header: Header for the row-label column (e.g. MAIN_CODE).
+            category_columns: Ordered count columns (e.g. the two USER_AKTIF labels).
+            total_records: Record count for the metadata block.
+            filter_applied: Filter label for the report header block.
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        workbook = Workbook()
+        summary_ws = workbook.active
+        summary_ws.title = "Summary_Report"
+        self._write_crosstab_sheet(
+            summary_ws,
+            crosstab_df,
+            row_label_header,
+            category_columns,
+            filter_applied,
+            total_records,
+        )
+
+        detail_ws = workbook.create_sheet(self.detail_sheet_name)
+        self._write_enriched_sheet(detail_ws, detail_df)
+
+        self._save(workbook, output_path)
+        return output_path
+
+    def _save(self, workbook: Workbook, output_path: Path) -> None:
+        """Persists the workbook, translating lock/IO failures to ExportError."""
         try:
             workbook.save(output_path)
         except PermissionError as exc:
@@ -111,7 +162,81 @@ class ExcelReportExporter:
         except Exception as exc:  # noqa: BLE001 - re-wrapped for the caller
             raise ExportError(f"Failed to write Excel report: {exc}") from exc
 
-        return output_path
+    def _write_crosstab_sheet(
+        self,
+        ws: Worksheet,
+        crosstab_df: pd.DataFrame,
+        row_label_header: str,
+        category_columns: list[str],
+        filter_applied: str | None,
+        total_records: int,
+    ) -> None:
+        """Writes the metadata block, the MAIN_CODE x category count grid, and totals."""
+        # --- Metadata header block ---
+        meta = [
+            (self.report_title, ""),
+            ("Processing Timestamp:", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            ("Total Records Processed:", f"{total_records:,}"),
+            ("Filter Applied:", filter_applied or "None"),
+        ]
+        for label, value in meta:
+            row = ws.max_row + 1 if ws.max_row > 1 or ws["A1"].value else ws.max_row
+            ws.cell(row=row, column=1, value=label).font = _TOTAL_FONT
+            ws.cell(row=row, column=1).fill = _META_FILL
+            ws.cell(row=row, column=2, value=value).fill = _META_FILL
+        ws["A1"].font = Font(bold=True, size=14, color="1F4E79")
+
+        header_row = ws.max_row + 2
+        headers = [row_label_header, *category_columns, "Grand Total"]
+
+        # --- Column headers ---
+        for col_idx, name in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=col_idx, value=name)
+            cell.font = _HEADER_FONT
+            cell.fill = _HEADER_FILL
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = _BORDER
+
+        # --- Data rows (row total appended per row) ---
+        first_data_row = header_row + 1
+        col_totals = {cat: 0 for cat in category_columns}
+        for r_offset, (_, record) in enumerate(crosstab_df.iterrows()):
+            excel_row = first_data_row + r_offset
+            ws.cell(row=excel_row, column=1, value=record[row_label_header]).border = (
+                _BORDER
+            )
+            row_total = 0
+            for c_offset, cat in enumerate(category_columns, start=2):
+                count = int(record[cat])
+                col_totals[cat] += count
+                row_total += count
+                cell = ws.cell(row=excel_row, column=c_offset, value=count)
+                cell.number_format = "#,##0"
+                cell.border = _BORDER
+            total_cell = ws.cell(
+                row=excel_row, column=len(headers), value=row_total
+            )
+            total_cell.number_format = "#,##0"
+            total_cell.border = _BORDER
+
+        # --- Grand Total row ---
+        total_row = first_data_row + len(crosstab_df)
+        ws.cell(row=total_row, column=1, value="Grand Total").font = _TOTAL_FONT
+        grand_total = 0
+        for c_offset, cat in enumerate(category_columns, start=2):
+            cell = ws.cell(row=total_row, column=c_offset, value=col_totals[cat])
+            cell.number_format = "#,##0"
+            cell.font = _TOTAL_FONT
+            grand_total += col_totals[cat]
+        gt_cell = ws.cell(row=total_row, column=len(headers), value=grand_total)
+        gt_cell.number_format = "#,##0"
+        gt_cell.font = _TOTAL_FONT
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=total_row, column=col_idx)
+            cell.fill = _TOTAL_FILL
+            cell.border = _BORDER
+
+        self._auto_fit_columns(ws)
 
     def _write_summary_sheet(
         self,

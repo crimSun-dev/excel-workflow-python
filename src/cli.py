@@ -42,13 +42,22 @@ def process(
         "akumulasi",
         "--workflow",
         "-w",
-        help="Workflow: akumulasi | rincian-vol-tf | rincian-portal-bg",
+        help="Workflow: akumulasi | rincian-vol-tf | rincian-portal-bg | "
+        "timeseries-fbi-briva | timeseries-active-user-qlola",
     ),
     reference: Optional[Path] = typer.Option(
         None,
         "--ref",
         "-f",
-        help="Path to reference.xlsx (required only for the akumulasi workflow)",
+        help="Path to reference.xlsx (required for akumulasi, timeseries-fbi-briva, "
+        "and timeseries-active-user-qlola)",
+    ),
+    master: Optional[Path] = typer.Option(
+        None,
+        "--master",
+        "-m",
+        help="Path to master-data workbook mapping ID -> MAIN_CODE "
+        "(required only for timeseries-active-user-qlola)",
     ),
     output: Path = typer.Option(
         Path("./Financial_Summary_Report.xlsx"),
@@ -84,10 +93,21 @@ def process(
         )
         raise typer.Exit(code=1)
 
-    if workflow_id == WorkflowId.AKUMULASI.value and reference is None:
+    from .workflows.registry import get_definition
+
+    definition = get_definition(workflow_id)
+    if definition.requires_reference and reference is None:
         typer.secho(
-            "\n[FAILED] The 'akumulasi' workflow requires --ref/-f (a reference "
-            "mapping file).",
+            f"\n[FAILED] The '{workflow_id}' workflow requires --ref/-f "
+            "(a reference mapping file).",
+            fg=typer.colors.RED,
+            bold=True,
+        )
+        raise typer.Exit(code=1)
+    if definition.requires_master_data and master is None:
+        typer.secho(
+            f"\n[FAILED] The '{workflow_id}' workflow requires --master/-m "
+            "(a master-data file mapping ID -> MAIN_CODE).",
             fg=typer.colors.RED,
             bold=True,
         )
@@ -96,6 +116,7 @@ def process(
     config = ProcessingConfig(
         raw_data_path=raw_data,
         reference_data_path=reference,
+        master_data_path=master,
         workflow_id=workflow_id,
         output_report_path=output,
         segmen_filter=segment,

@@ -7,6 +7,11 @@ import pytest
 from openpyxl import load_workbook
 
 from src.aggregation import AggregationEngine
+from src.enrichment import (
+    MasterDataEnricher,
+    ReferenceEnricher,
+    ReferenceEnrichmentError,
+)
 from src.ingestion import IngestionEngine
 from src.orchestrator import PipelineOrchestrator
 from src.schemas import ProcessingConfig
@@ -17,17 +22,27 @@ from src.workflows.registry import WORKFLOW_REGISTRY, get_strategy
 # --------------------------------------------------------------------------- #
 # Registry / dispatch
 # --------------------------------------------------------------------------- #
-def test_registry_has_all_three_workflows():
+def test_registry_has_all_five_workflows():
     assert set(WORKFLOW_REGISTRY) == {
         WorkflowId.AKUMULASI,
         WorkflowId.RINCIAN_VOL_TF,
         WorkflowId.RINCIAN_PORTAL_BG,
+        WorkflowId.TIMESERIES_FBI_BRIVA,
+        WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA,
     }
 
 
 def test_get_strategy_accepts_string_id():
     strategy = get_strategy("rincian-vol-tf")
     assert strategy.definition.workflow_id is WorkflowId.RINCIAN_VOL_TF
+
+
+def test_get_strategy_resolves_new_timeseries_ids():
+    briva = get_strategy("timeseries-fbi-briva")
+    assert briva.definition.workflow_id is WorkflowId.TIMESERIES_FBI_BRIVA
+    qlola = get_strategy("timeseries-active-user-qlola")
+    assert qlola.definition.workflow_id is WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA
+    assert qlola.definition.requires_master_data is True
 
 
 def test_get_strategy_unknown_id_raises():
@@ -262,3 +277,184 @@ def test_ingestion_coerces_amount_column():
     df = pd.DataFrame({"AMOUNT_IN_IDR": ["1,000", "2000", "bad"]})
     coerced = engine._coerce_numeric_columns(df.copy())
     assert coerced["AMOUNT_IN_IDR"].tolist() == [1000.0, 2000.0, 0.0]
+
+
+# --------------------------------------------------------------------------- #
+# Reference enrichment extensions (raw alias + master ID->MAIN_CODE)
+# --------------------------------------------------------------------------- #
+def test_enrichment_resolves_raw_kode_uker_alias(reference_file):
+    # Raw frame carries the spaced `KODE UKER` while the lookup key is KODE_UKER.
+    raw = pd.DataFrame({"KODE UKER": ["0001", "0002"], "VOLUME_IDR": [1.0, 2.0]})
+    result = ReferenceEnricher(reference_file).enrich(raw)
+    assert "MAIN_CODE" in result.data.columns
+    assert "MAIN_BRANCH" in result.data.columns
+    assert result.unmapped_count == 0
+
+
+def test_master_enricher_maps_id_to_main_code(qlola_master_file):
+    mapping = MasterDataEnricher(qlola_master_file).build_id_to_main_code()
+    assert mapping["U1"] == "7"
+    assert mapping["U3"] == "9"
+    assert "U5" not in mapping  # absent from master => later marked UNMAPPED
+
+
+def test_master_enricher_unresolvable_columns_raises(tmp_path):
+    bad = pd.DataFrame({"FOO": ["1"], "BAR": ["2"]})
+    path = tmp_path / "master_bad.xlsx"
+    bad.to_excel(path, index=False)
+    with pytest.raises(ReferenceEnrichmentError) as exc:
+        MasterDataEnricher(path).build_id_to_main_code()
+    message = str(exc.value)
+    assert "Aliases attempted" in message
+    assert "Sheets scanned" in message
+
+
+# --------------------------------------------------------------------------- #
+# Time Series FBI Briva
+# --------------------------------------------------------------------------- #
+def test_briva_nonwholesale_volume_matches_sample_grand_total(
+    timeseries_briva_file, reference_file, tmp_path
+):
+    out = tmp_path / "briva.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=timeseries_briva_file,
+        reference_data_path=reference_file,
+        workflow_id="timeseries-fbi-briva",
+        output_report_path=out,
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["Summary_Report"]
+    headers, rows, grand_total = _read_summary_table(ws)
+
+    # Value header renders as the sample Sheet1 label.
+    assert "Sum of VOLUME_IDR" in headers
+    # NONWHOLESALE branch totals (the WHOLESALE row is excluded).
+    assert rows["MC10"]["Sum of VOLUME_IDR"] == 1_481_517_421_603.75
+    assert rows["MC20"]["Sum of VOLUME_IDR"] == 1_000_000_000_000.0
+    # Grand Total matches the sample oracle constant.
+    assert grand_total["Sum of VOLUME_IDR"] == 2_481_517_421_603.75
+
+
+def test_briva_missing_reference_fails_clearly(timeseries_briva_file, tmp_path):
+    config = ProcessingConfig(
+        raw_data_path=timeseries_briva_file,
+        workflow_id="timeseries-fbi-briva",
+        output_report_path=tmp_path / "out.xlsx",
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is False
+    assert "reference" in (report.error_message or "").lower()
+    assert not (tmp_path / "out.xlsx").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Time Series Active User Qlola
+# --------------------------------------------------------------------------- #
+def _read_crosstab_table(ws):
+    """Extracts ({MAIN_CODE: {col: count}}, grand-total-dict) from a crosstab sheet."""
+    header_row = None
+    for row in ws.iter_rows():
+        if row[0].value == "MAIN_CODE":
+            header_row = row[0].row
+            break
+    assert header_row is not None, "Crosstab header not found"
+
+    headers = []
+    for cell in ws[header_row]:
+        if cell.value is None:
+            break
+        headers.append(cell.value)
+
+    rows: dict[str, dict] = {}
+    grand_total: dict = {}
+    r = header_row + 1
+    while True:
+        first = ws.cell(row=r, column=1).value
+        if first is None:
+            break
+        record = {
+            headers[i]: ws.cell(row=r, column=i + 1).value for i in range(len(headers))
+        }
+        if first == "Grand Total":
+            grand_total = record
+            break
+        rows[first] = record
+        r += 1
+    return headers, rows, grand_total
+
+
+def _run_qlola(qlola_raw_file, uker, master, out):
+    config = ProcessingConfig(
+        raw_data_path=qlola_raw_file,
+        reference_data_path=uker,
+        master_data_path=master,
+        workflow_id="timeseries-active-user-qlola",
+        output_report_path=out,
+    )
+    return PipelineOrchestrator.execute(config)
+
+
+def test_qlola_crosstab_uses_master_main_code_not_uker(
+    qlola_raw_file, qlola_uker_reference_file, qlola_master_file, tmp_path
+):
+    out = tmp_path / "qlola.xlsx"
+    report = _run_qlola(qlola_raw_file, qlola_uker_reference_file, qlola_master_file, out)
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["Summary_Report"]
+    headers, rows, grand_total = _read_crosstab_table(ws)
+
+    assert headers == ["MAIN_CODE", "AKTIF TRX >=5x", "TIDAK AKTIF <5x", "Grand Total"]
+
+    # Rows are keyed on MASTER MAIN_CODE (7 / 9 / UNMAPPED), NOT the UKER code 99.
+    assert set(rows) == {"7", "9", "UNMAPPED"}
+    assert "99" not in rows
+
+    # Master-keyed distribution (CMS excluded, FREKUENSI summed per ID, >=5 active):
+    #   7: U1(7)=AKTIF, U2(2)+U4(1)=TIDAK  -> 1 / 2
+    #   9: U3(5)=AKTIF                      -> 1 / 0  (U6 was CMS-only => dropped)
+    #   UNMAPPED: U5(9)=AKTIF              -> 1 / 0
+    assert rows["7"]["AKTIF TRX >=5x"] == 1
+    assert rows["7"]["TIDAK AKTIF <5x"] == 2
+    assert rows["9"]["AKTIF TRX >=5x"] == 1
+    assert rows["9"]["TIDAK AKTIF <5x"] == 0
+    assert rows["UNMAPPED"]["AKTIF TRX >=5x"] == 1
+
+    # Grand Totals for this fixture.
+    assert grand_total["AKTIF TRX >=5x"] == 3
+    assert grand_total["TIDAK AKTIF <5x"] == 2
+    assert grand_total["Grand Total"] == 5
+
+
+def test_qlola_missing_master_fails_clearly(
+    qlola_raw_file, qlola_uker_reference_file, tmp_path
+):
+    out = tmp_path / "qlola_no_master.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=qlola_raw_file,
+        reference_data_path=qlola_uker_reference_file,
+        workflow_id="timeseries-active-user-qlola",
+        output_report_path=out,
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is False
+    assert "master" in (report.error_message or "").lower()
+    assert not out.exists()
+
+
+def test_qlola_missing_reference_fails_clearly(
+    qlola_raw_file, qlola_master_file, tmp_path
+):
+    out = tmp_path / "qlola_no_ref.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=qlola_raw_file,
+        master_data_path=qlola_master_file,
+        workflow_id="timeseries-active-user-qlola",
+        output_report_path=out,
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is False
+    assert "reference" in (report.error_message or "").lower()
+    assert not out.exists()

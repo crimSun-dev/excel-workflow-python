@@ -30,6 +30,8 @@ class WorkflowId(str, Enum):
     AKUMULASI = "akumulasi"
     RINCIAN_VOL_TF = "rincian-vol-tf"
     RINCIAN_PORTAL_BG = "rincian-portal-bg"
+    TIMESERIES_FBI_BRIVA = "timeseries-fbi-briva"
+    TIMESERIES_ACTIVE_USER_QLOLA = "timeseries-active-user-qlola"
 
 
 class WorkflowValidationError(Exception):
@@ -52,6 +54,15 @@ class WorkflowDefinition:
     required_columns: tuple[str, ...] = ()
     exclude_segmen: tuple[str, ...] = ()
     supports_segment_filter: bool = False
+    # Definition-baked SEGMEN inclusion filter (e.g. Briva keeps only NONWHOLESALE).
+    # Applied ahead of the optional runtime `segmen_filter`; distinct from the
+    # `exclude_segmen` exclusion list so inclusion vs exclusion never share a flag.
+    segmen_include: str | None = None
+    # Dedicated SOURCE exclusion list (e.g. Qlola drops CMS). Kept separate from
+    # SEGMEN filtering so the two column filters never collide.
+    exclude_source: tuple[str, ...] = ()
+    # Whether this workflow needs a second (master-data) reference file.
+    requires_master_data: bool = False
     # Ordered value columns to aggregate. Empty => single-column workflow that
     # sums only `value_col` (backward-compatible with Rincian Vol TF / Portal BG).
     value_cols: tuple[str, ...] = ()
@@ -110,10 +121,13 @@ class WorkflowStrategy(ABC):
         data, unmapped_count = self._enrich(config, data)
 
         # 4. Aggregate (group + sum, with inclusion/exclusion SEGMEN handling).
+        # A definition-baked inclusion (e.g. Briva NONWHOLESALE) takes precedence
+        # over the optional runtime SEGMEN filter.
+        segment_filter = definition.segmen_include or (
+            config.segmen_filter if definition.supports_segment_filter else None
+        )
         aggregator = AggregationEngine(
-            segment_filter=(
-                config.segmen_filter if definition.supports_segment_filter else None
-            ),
+            segment_filter=segment_filter,
             exclude_segmen=list(definition.exclude_segmen) or None,
         )
         aggregated = aggregator.aggregate(

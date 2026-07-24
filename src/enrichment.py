@@ -57,6 +57,17 @@ MAIN_BRANCH_ALIASES = [
     "DESCRIPTION",
 ]
 
+# Ordered aliases for the master-data ID column (Qlola ID -> MAIN_CODE lookup).
+ID_ALIASES = [
+    "ID",
+    "ID USER",
+    "USER ID",
+    "USERID",
+    "ID QLOLA",
+    "CIF",
+    "NO REKENING",
+]
+
 _EXCEL_SUFFIXES = (".xlsx", ".xls", ".xlsm")
 
 
@@ -85,6 +96,10 @@ class ReferenceEnricher:
                 lookup key column is absent in either dataset.
         """
         ref_df = self._load_reference()
+
+        # Resolve the join key on the raw frame too: real Briva exports keep the
+        # spaced header `KODE UKER` while the configured key is `KODE_UKER`.
+        raw_df = self._resolve_raw_lookup_key(raw_df)
 
         if self.lookup_key not in raw_df.columns:
             raise ReferenceEnrichmentError(
@@ -146,6 +161,20 @@ class ReferenceEnricher:
             if alias not in aliases:
                 aliases.append(alias)
         return aliases
+
+    def _resolve_raw_lookup_key(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """Renames a raw alias column to the configured lookup key when needed.
+
+        Raw headers are already upper/stripped by ingestion, so `KODE UKER`
+        stays spaced; if the canonical key is absent but a known alias is
+        present, rename it in-memory so the downstream merge is unchanged.
+        """
+        if self.lookup_key in raw_df.columns:
+            return raw_df
+        for alias in self._lookup_aliases():
+            if alias in raw_df.columns:
+                return raw_df.rename(columns={alias: self.lookup_key})
+        return raw_df
 
     def _resolve_reference_columns(
         self, df: pd.DataFrame
@@ -266,4 +295,99 @@ class ReferenceEnricher:
             f"  - lookup key: {self._lookup_aliases()}\n"
             f"  - {MAIN_CODE}: {MAIN_CODE_ALIASES}\n"
             f"  - {MAIN_BRANCH}: {MAIN_BRANCH_ALIASES}"
+        )
+
+
+class MasterDataEnricher:
+    """Resolves an ID -> MAIN_CODE mapping from a master-data workbook.
+
+    Used by the Qlola workflow to key its final crosstab on the master
+    MAIN_CODE rather than the UKER-enriched MAIN_CODE. Columns are resolved via
+    the shared alias registries (ID and MAIN_CODE), scanning every sheet — the
+    manual "VLOOKUP column index 21" note is treated as a discovery hint, never
+    as the shipped contract.
+    """
+
+    def __init__(self, master_path: Path):
+        self.master_path = Path(master_path)
+
+    def build_id_to_main_code(self) -> dict[str, str]:
+        """Returns a {stripped-str ID: MAIN_CODE} mapping (first key wins).
+
+        Raises:
+            ReferenceEnrichmentError: if no sheet resolves both an ID column and
+                a MAIN_CODE column via aliases, listing sheets and aliases tried.
+        """
+        if not self.master_path.exists():
+            raise ReferenceEnrichmentError(
+                f"Master-data file not found: {self.master_path}"
+            )
+        suffix = self.master_path.suffix.lower()
+        try:
+            if suffix in _EXCEL_SUFFIXES:
+                frames = self._read_excel_sheets()
+            elif suffix == ".csv":
+                frames = [("(csv)", self._read_csv())]
+            else:
+                raise ReferenceEnrichmentError(
+                    f"Unsupported master-data file type: '{suffix}'"
+                )
+        except ReferenceEnrichmentError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - re-wrapped for the caller
+            raise ReferenceEnrichmentError(
+                f"Failed to load master-data file {self.master_path}: {exc}"
+            ) from exc
+
+        attempts: list[tuple[str, list[str]]] = []
+        for sheet_name, df in frames:
+            id_col = self._first_alias(df, ID_ALIASES)
+            code_col = self._first_alias(df, MAIN_CODE_ALIASES)
+            if id_col is not None and code_col is not None:
+                mapping = (
+                    df[[id_col, code_col]]
+                    .assign(
+                        **{
+                            id_col: df[id_col].astype(str).str.strip(),
+                            code_col: df[code_col].astype(str).str.strip(),
+                        }
+                    )
+                    .drop_duplicates(subset=id_col, keep="first")
+                )
+                return dict(zip(mapping[id_col], mapping[code_col]))
+            attempts.append((sheet_name, list(df.columns)))
+
+        raise self._unresolvable_error(attempts)
+
+    def _read_csv(self) -> pd.DataFrame:
+        df = pd.read_csv(self.master_path, dtype=str)
+        df.columns = [str(c).strip().upper() for c in df.columns]
+        return df
+
+    def _read_excel_sheets(self) -> list[tuple[str, pd.DataFrame]]:
+        excel_file = pd.ExcelFile(self.master_path)
+        frames: list[tuple[str, pd.DataFrame]] = []
+        for sheet_name in excel_file.sheet_names:
+            df = pd.read_excel(excel_file, sheet_name=sheet_name, dtype=str)
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            frames.append((str(sheet_name), df))
+        return frames
+
+    @staticmethod
+    def _first_alias(df: pd.DataFrame, aliases: list[str]) -> str | None:
+        return next((alias for alias in aliases if alias in df.columns), None)
+
+    def _unresolvable_error(
+        self, attempts: list[tuple[str, list[str]]]
+    ) -> ReferenceEnrichmentError:
+        sheet_lines = "\n".join(
+            f"  - sheet '{name}': columns {cols}" for name, cols in attempts
+        )
+        return ReferenceEnrichmentError(
+            "Unable to resolve required master-data columns "
+            f"('ID', '{MAIN_CODE}') in {self.master_path}.\n"
+            f"Sheets scanned:\n{sheet_lines}\n"
+            "Aliases attempted:\n"
+            f"  - ID: {ID_ALIASES}\n"
+            f"  - {MAIN_CODE}: {MAIN_CODE_ALIASES}"
         )

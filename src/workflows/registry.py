@@ -11,11 +11,15 @@ from .akumulasi import AkumulasiStrategy
 from .base import WorkflowDefinition, WorkflowId, WorkflowStrategy, WorkflowValidationError
 from .rincian_portal_bg import RincianPortalBgStrategy
 from .rincian_vol_tf import RincianVolTfStrategy
+from .timeseries_active_user_qlola import TimeSeriesActiveUserQlolaStrategy
+from .timeseries_fbi_briva import TimeSeriesFbiBrivaStrategy
 
 WORKFLOW_REGISTRY: dict[WorkflowId, WorkflowStrategy] = {
     WorkflowId.AKUMULASI: AkumulasiStrategy(),
     WorkflowId.RINCIAN_VOL_TF: RincianVolTfStrategy(),
     WorkflowId.RINCIAN_PORTAL_BG: RincianPortalBgStrategy(),
+    WorkflowId.TIMESERIES_FBI_BRIVA: TimeSeriesFbiBrivaStrategy(),
+    WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA: TimeSeriesActiveUserQlolaStrategy(),
 }
 
 

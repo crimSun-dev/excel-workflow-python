@@ -1,6 +1,7 @@
 """Multi-workflow processing package.
 
-Each report workflow (Akumulasi, Rincian Vol TF, Rincian Portal BG) is a
+Each report workflow (Akumulasi, Rincian Vol TF, Rincian Portal BG, Time Series
+FBI Briva, Time Series Active User Qlola) is a
 `WorkflowStrategy` subclass sharing a common ingest -> optional enrich ->
 aggregate -> export skeleton. Concrete strategies and the dispatch registry
 live in submodules; this package root is intentionally kept import-light so

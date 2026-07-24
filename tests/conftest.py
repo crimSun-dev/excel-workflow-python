@@ -238,6 +238,86 @@ def rincian_vol_tf_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def timeseries_briva_file(tmp_path: Path) -> Path:
+    """Pipe-delimited Time Series FBI Briva sample.
+
+    Uses the spaced `KODE UKER` header (exercises raw-side alias resolution) and
+    a WHOLESALE row that MUST be excluded by the NONWHOLESALE inclusion filter.
+    NONWHOLESALE VOLUME_IDR by branch (via reference_file 0001->MC10, 0002->MC20):
+        MC10 = 1481517421603.75
+        MC20 = 1000000000000.00
+    Grand Total = 2481517421603.75 (the sample Sheet1 oracle constant).
+    """
+    content = (
+        "SEGMEN|KODE UKER|VOLUME_IDR\n"
+        "NONWHOLESALE|0001|1481517421603.75\n"
+        "NONWHOLESALE|0002|1000000000000\n"
+        "WHOLESALE|0001|999999999999\n"
+    )
+    path = tmp_path / "timeseries_briva_sample.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def qlola_raw_file(tmp_path: Path) -> Path:
+    """Pipe-delimited Time Series Active User Qlola sample.
+
+    Exercises: CMS exclusion (U1's CMS row and U6's CMS-only rows dropped),
+    FREKUENSI summed per ID (U1 = 3 + 4 = 7), the >=5 active threshold, an
+    UNMAPPED master ID (U5), and the master-vs-UKER guard (all KODE_UKER map to
+    UKER MAIN_CODE 99, but the crosstab must key on master codes 7/9/UNMAPPED).
+    """
+    content = (
+        "SOURCE|ID|FREKUENSI|KODE_UKER\n"
+        "QCASH|U1|3|K1\n"
+        "QIB|U1|4|K1\n"
+        "CMS|U1|100|K1\n"
+        "QCASH|U2|2|K2\n"
+        "QCASH|U3|5|K1\n"
+        "QCASH|U4|1|K2\n"
+        "QCASH|U5|9|K1\n"
+        "CMS|U6|10|K1\n"
+    )
+    path = tmp_path / "qlola_sample.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def qlola_uker_reference_file(tmp_path: Path) -> Path:
+    """UKER reference for Qlola; every key maps to MAIN_CODE 99 (detail context).
+
+    Deliberately distinct from the master mapping so a test can prove the final
+    crosstab uses master MAIN_CODE, not this UKER-enriched one.
+    """
+    ref = pd.DataFrame(
+        {
+            "KODE_UKER": ["K1", "K2"],
+            "MAIN_CODE": ["99", "99"],
+            "MAIN_BRANCH": ["Uker Branch 99", "Uker Branch 99"],
+        }
+    )
+    path = tmp_path / "qlola_uker_reference.xlsx"
+    ref.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
+def qlola_master_file(tmp_path: Path) -> Path:
+    """Master-data ID -> MAIN_CODE mapping for Qlola (U5 omitted => UNMAPPED)."""
+    master = pd.DataFrame(
+        {
+            "ID": ["U1", "U2", "U3", "U4", "U6"],
+            "MAIN_CODE": ["7", "7", "9", "7", "9"],
+        }
+    )
+    path = tmp_path / "qlola_master.xlsx"
+    master.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
 def rincian_portal_bg_file(tmp_path: Path) -> Path:
     """Pipe-delimited sample for the Rincian Portal BG workflow (no filtering).
 

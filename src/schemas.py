@@ -21,12 +21,17 @@ class ProcessingConfig(BaseModel):
     reference_data_path: Optional[Path] = Field(
         default=None,
         description="Path to reference mapping Excel/CSV file "
-        "(required only for the Akumulasi workflow)",
+        "(required for Akumulasi, Time Series FBI Briva, and Qlola workflows)",
+    )
+    master_data_path: Optional[Path] = Field(
+        default=None,
+        description="Path to master-data Excel/CSV file mapping ID -> MAIN_CODE "
+        "(required only for the Time Series Active User Qlola workflow)",
     )
     workflow_id: str = Field(
         default="akumulasi",
-        description="Selected workflow id "
-        "(akumulasi | rincian-vol-tf | rincian-portal-bg)",
+        description="Selected workflow id (akumulasi | rincian-vol-tf | "
+        "rincian-portal-bg | timeseries-fbi-briva | timeseries-active-user-qlola)",
     )
     output_report_path: Path = Field(
         default=Path("./Financial_Summary_Report.xlsx"),
