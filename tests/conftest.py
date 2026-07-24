@@ -7,6 +7,66 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+# --------------------------------------------------------------------------- #
+# Real-sample acceptance oracles (Time Series Briva / Qlola).
+#
+# These vendor workbooks are large and git-ignored (`*.xlsx`), so the fixtures
+# below derive compact master/UKER mappings from them at runtime and SKIP when
+# the samples are absent. Path A': the Qlola master ID->MAIN_CODE mapping is
+# derived from the sample Sheet1 intermediate table (the post-step-4 mapping the
+# manual workflow produced); the original vendor MASTER/UKER files were never
+# available.
+# --------------------------------------------------------------------------- #
+SAMPLES_DIR = Path(__file__).parent / "fixtures" / "samples"
+QLOLA_RAW = SAMPLES_DIR / "1784686455_REPORT_SUMMARY_MONTHLY_2026-07-20_QLOLA_ALL.csv"
+QLOLA_XLSX = (
+    SAMPLES_DIR / "1784686455_REPORT_SUMMARY_MONTHLY_2026-07-20_QLOLA_ALL.csv.xlsx"
+)
+BRIVA_RAW = SAMPLES_DIR / "NON_WHOLESALE_2026-07-21_1784773298.csv"
+BRIVA_XLSX = SAMPLES_DIR / "NON_WHOLESALE_2026-07-21_1784773298.csv.xlsx"
+
+
+@pytest.fixture(scope="session")
+def qlola_sample_inputs(tmp_path_factory) -> dict[str, Path]:
+    """Derives Qlola raw + UKER + master fixtures from the real sample (A')."""
+    if not QLOLA_XLSX.exists() or not QLOLA_RAW.exists():
+        pytest.skip("QLOLA sample workbook not present (git-ignored); oracle skipped")
+    out_dir = tmp_path_factory.mktemp("qlola_sample")
+
+    # Master ID -> MAIN_CODE from Sheet1 intermediate table (cols D, E).
+    sheet1 = pd.read_excel(QLOLA_XLSX, sheet_name="Sheet1", header=None)
+    inter = sheet1.iloc[:, [3, 4]].copy()
+    inter.columns = ["ID", "MAIN_CODE"]
+    inter = inter[inter["ID"].notna() & (inter["ID"].astype(str) != "ID")]
+    master_path = out_dir / "qlola_master.csv"
+    inter.to_csv(master_path, index=False)
+
+    # UKER reference (detail context only) from the detail sheet.
+    detail_sheet = pd.ExcelFile(QLOLA_XLSX).sheet_names[1]
+    detail = pd.read_excel(QLOLA_XLSX, sheet_name=detail_sheet)
+    uker = detail[["KODE_UKER", "MAIN_CODE", "MAIN_BRANCH"]].drop_duplicates("KODE_UKER")
+    uker_path = out_dir / "qlola_uker.csv"
+    uker.to_csv(uker_path, index=False)
+
+    return {"raw": QLOLA_RAW, "uker": uker_path, "master": master_path}
+
+
+@pytest.fixture(scope="session")
+def briva_sample_inputs(tmp_path_factory) -> dict[str, Path]:
+    """Derives Briva raw + UKER fixtures from the real sample workbook."""
+    if not BRIVA_XLSX.exists() or not BRIVA_RAW.exists():
+        pytest.skip("Briva sample workbook not present (git-ignored); oracle skipped")
+    out_dir = tmp_path_factory.mktemp("briva_sample")
+
+    detail_sheet = pd.ExcelFile(BRIVA_XLSX).sheet_names[1]
+    detail = pd.read_excel(BRIVA_XLSX, sheet_name=detail_sheet)
+    detail.columns = [str(c).strip() for c in detail.columns]
+    uker = detail[["KODE UKER", "MAIN_CODE", "MAIN_BRANCH"]].drop_duplicates("KODE UKER")
+    uker_path = out_dir / "briva_uker.csv"
+    uker.to_csv(uker_path, index=False)
+
+    return {"raw": BRIVA_RAW, "uker": uker_path}
+
 
 @pytest.fixture
 def raw_pipe_file(tmp_path: Path) -> Path:

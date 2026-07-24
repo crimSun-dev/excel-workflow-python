@@ -458,3 +458,49 @@ def test_qlola_missing_reference_fails_clearly(
     assert report.success is False
     assert "reference" in (report.error_message or "").lower()
     assert not out.exists()
+
+
+# --------------------------------------------------------------------------- #
+# Real-sample acceptance oracles (Path A' — skip if vendor samples absent)
+# --------------------------------------------------------------------------- #
+def test_qlola_real_sample_sheet1_oracle(qlola_sample_inputs, tmp_path):
+    """Full crosstab parity with the QLOLA sample Sheet1 (3000/1820/4820; 7->130/81)."""
+    out = tmp_path / "qlola_real.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=qlola_sample_inputs["raw"],
+        reference_data_path=qlola_sample_inputs["uker"],
+        master_data_path=qlola_sample_inputs["master"],
+        workflow_id="timeseries-active-user-qlola",
+        output_report_path=out,
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["Summary_Report"]
+    _, rows, grand_total = _read_crosstab_table(ws)
+
+    # Per-MAIN_CODE parity (master ID->MAIN_CODE key, not UKER): code 7 -> 130/81.
+    assert rows["7"]["AKTIF TRX >=5x"] == 130
+    assert rows["7"]["TIDAK AKTIF <5x"] == 81
+    # Sheet1 Grand Totals.
+    assert grand_total["AKTIF TRX >=5x"] == 3000
+    assert grand_total["TIDAK AKTIF <5x"] == 1820
+    assert grand_total["Grand Total"] == 4820
+
+
+def test_briva_real_sample_sheet1_oracle(briva_sample_inputs, tmp_path):
+    """Grand Total parity with the Briva sample Sheet1 (2481517421603.75)."""
+    out = tmp_path / "briva_real.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=briva_sample_inputs["raw"],
+        reference_data_path=briva_sample_inputs["uker"],
+        workflow_id="timeseries-fbi-briva",
+        output_report_path=out,
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["Summary_Report"]
+    headers, _, grand_total = _read_summary_table(ws)
+    assert "Sum of VOLUME_IDR" in headers
+    assert grand_total["Sum of VOLUME_IDR"] == 2_481_517_421_603.75
