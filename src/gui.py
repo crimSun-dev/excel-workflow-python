@@ -11,10 +11,33 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .branding import PRODUCT_BYLINE, PRODUCT_NAME, logo_path
 from .orchestrator import PipelineOrchestrator
 from .schemas import ProcessingConfig
 from .workflows.base import WorkflowId
 from .workflows.registry import get_definition
+
+
+def _load_logo_image(tk_module) -> "object | None":
+    """Loads the crimSun logo as a header-sized PhotoImage, or None on failure.
+
+    Tolerates a missing/invalid asset (returns None) so the GUI never fails
+    solely because the logo could not load.
+    """
+    path = logo_path()
+    if path is None:
+        return None
+    try:
+        image = tk_module.PhotoImage(file=str(path))
+    except Exception:  # noqa: BLE001 - logo is decorative; never block the GUI
+        return None
+    # Integer-subsample a large source down to ~64px tall for the header.
+    target = 64
+    height = image.height() or target
+    factor = max(1, round(height / target))
+    if factor > 1:
+        image = image.subsample(factor, factor)
+    return image
 
 
 def launch_gui() -> None:
@@ -23,9 +46,18 @@ def launch_gui() -> None:
     from tkinter import filedialog, messagebox, ttk
 
     root = tk.Tk()
-    root.title("Excel Workflow Processor")
-    root.geometry("640x460")
+    root.title(PRODUCT_NAME)
+    root.geometry("640x500")
     root.resizable(False, False)
+
+    # Load the logo once; keep references on root so Tk does not GC the images.
+    logo_image = _load_logo_image(tk)
+    root._logo_img = logo_image  # type: ignore[attr-defined]
+    if logo_image is not None:
+        try:
+            root.iconphoto(True, logo_image)
+        except Exception:  # noqa: BLE001 - window icon is best-effort
+            pass
 
     state: dict[str, Path | None] = {
         "raw": None,
@@ -130,9 +162,18 @@ def launch_gui() -> None:
             messagebox.showerror("Pipeline failed", report.error_message or "Unknown error")
 
     pad = {"padx": 10, "pady": 6}
-    ttk.Label(root, text="Excel Workflow Processor", font=("Segoe UI", 14, "bold")).grid(
-        row=0, column=0, columnspan=3, **pad
+
+    # --- Branded header: logo (if available) + product name + byline ---
+    header = ttk.Frame(root)
+    header.grid(row=0, column=0, columnspan=3, **pad)
+    if logo_image is not None:
+        ttk.Label(header, image=logo_image).pack(side="left", padx=(0, 12))
+    text_col = ttk.Frame(header)
+    text_col.pack(side="left")
+    ttk.Label(text_col, text=PRODUCT_NAME, font=("Segoe UI", 16, "bold")).pack(
+        anchor="w"
     )
+    ttk.Label(text_col, text=PRODUCT_BYLINE, font=("Segoe UI", 10)).pack(anchor="w")
 
     # --- Workflow selector ---
     ttk.Label(root, text="Workflow:").grid(row=1, column=0, sticky="e", **pad)

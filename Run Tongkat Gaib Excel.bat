@@ -81,7 +81,7 @@ echo.
 echo Fix options:
 echo   1. Install Python 3.12 ^(64-bit, standard build^) from python.org
 echo   2. Delete the .venv folder in this project, then run this file again
-echo   3. Ask for ExcelWorkflowProcessor.exe ^(no Python needed^)
+echo   3. Ask for TongkatGaibExcel.exe ^(no Python needed^)
 echo.
 pause
 exit /b 1

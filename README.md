@@ -1,6 +1,6 @@
-# Excel Workflow Processor
+# Tongkat Gaib Excel
 
-Automated **Financial Data Processing & Excel Summarization Pipeline**.
+**by crimSun** — Automated **Financial Data Processing & Excel Summarization Pipeline**.
 
 This tool replaces a manual 4-step Microsoft Excel workflow (Text-to-Columns →
 VLOOKUP → PivotTable → formatting) with a fast, testable, headless Python ETL
@@ -12,7 +12,7 @@ which itself automates the manual process described in
 
 ## Quick start on Windows
 
-Double-click **`Run Excel Workflow.bat`**. The launcher automatically creates
+Double-click **`Run Tongkat Gaib Excel.bat`**. The launcher automatically creates
 the Python environment, installs missing packages, and opens the GUI.
 
 **Requirements:** Python **3.10–3.13** (64-bit, standard build). Avoid the
@@ -161,8 +161,10 @@ pip install pyinstaller
 python build_exe.py
 ```
 
-Produces `dist/ExcelWorkflowProcessor.exe`, a single zero-dependency executable
-that runs on a clean Windows machine without Python installed.
+Produces `dist/TongkatGaibExcel.exe`, a single zero-dependency executable
+that runs on a clean Windows machine without Python installed. The crimSun logo
+is bundled into the exe (via PyInstaller `datas`), so no side-car assets folder
+is required.
 
 ## Project layout
 
@@ -181,8 +183,10 @@ that runs on a clean Windows machine without Python installed.
 │   │   ├── rincian_portal_bg.py  # Rincian Portal BG (no filter)
 │   │   └── registry.py       # WORKFLOW_REGISTRY + get_strategy()
 │   ├── cli.py            # Typer CLI (--workflow)
+│   ├── branding.py       # Product name / byline / logo path (crimSun)
 │   └── gui.py            # Tkinter file-picker fallback (workflow dropdown)
-├── tests/               # pytest suite (40 tests)
+├── assets/              # crimSun logo (bundled into the exe)
+├── tests/               # pytest suite
 ├── sample_data/         # Example raw + reference files
 ├── main.py              # Entry point (GUI when run with no args)
 ├── build_exe.py         # PyInstaller build script

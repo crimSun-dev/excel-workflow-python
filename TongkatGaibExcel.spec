@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+# Bundle the crimSun logo so the GUI/icon resolve it from the one-file bundle.
+datas = [('assets/crimsun_logo.png', 'assets')]
 binaries = []
 hiddenimports = ['tkinter']
 tmp_ret = collect_all('pydantic')
@@ -29,7 +30,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='ExcelWorkflowProcessor',
+    name='TongkatGaibExcel',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
