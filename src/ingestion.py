@@ -27,8 +27,16 @@ class DataIngestionError(Exception):
 class IngestionEngine:
     """Parses pipe-delimited raw financial data files into structured DataFrames."""
 
-    def __init__(self, delimiter: str = "|"):
+    def __init__(
+        self,
+        delimiter: str = "|",
+        numeric_columns: tuple[str, ...] | list[str] = (VOLUME_COLUMN,),
+    ):
         self.delimiter = delimiter
+        # Workflow-specific monetary columns to coerce to float64 (e.g. the
+        # Akumulasi workflow uses VOLUME_IN_IDR, the Rincian workflows use
+        # AMOUNT_IN_IDR). Only columns actually present in the file are coerced.
+        self.numeric_columns = tuple(numeric_columns)
 
     def read_raw_data(self, file_path: Path) -> IngestionResult:
         """Reads pipe-delimited text file with automatic encoding fallback.
@@ -71,7 +79,7 @@ class IngestionEngine:
             rows.append(fields)
 
         df = pd.DataFrame(rows, columns=header)
-        df = self._coerce_numeric_volume(df)
+        df = self._coerce_numeric_columns(df)
 
         return IngestionResult(
             data=df,
@@ -98,15 +106,15 @@ class IngestionEngine:
         """Strips whitespace and uppercases header names for stable joins."""
         return [h.strip().upper() for h in headers]
 
-    @staticmethod
-    def _coerce_numeric_volume(df: pd.DataFrame) -> pd.DataFrame:
-        """Converts the volume column to float64, defaulting bad values to 0.0."""
-        if VOLUME_COLUMN in df.columns:
-            cleaned = (
-                df[VOLUME_COLUMN]
-                .astype(str)
-                .str.replace(",", "", regex=False)
-                .str.strip()
-            )
-            df[VOLUME_COLUMN] = pd.to_numeric(cleaned, errors="coerce").fillna(0.0)
+    def _coerce_numeric_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Converts the configured numeric columns to float64 (bad values -> 0.0)."""
+        for column in self.numeric_columns:
+            if column in df.columns:
+                cleaned = (
+                    df[column]
+                    .astype(str)
+                    .str.replace(",", "", regex=False)
+                    .str.strip()
+                )
+                df[column] = pd.to_numeric(cleaned, errors="coerce").fillna(0.0)
         return df

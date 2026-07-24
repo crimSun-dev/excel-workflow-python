@@ -11,15 +11,22 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProcessingConfig(BaseModel):
     """Immutable runtime configuration passed to the orchestrator."""
 
     raw_data_path: Path = Field(..., description="Path to raw pipe-delimited file")
-    reference_data_path: Path = Field(
-        ..., description="Path to reference mapping Excel/CSV file"
+    reference_data_path: Optional[Path] = Field(
+        default=None,
+        description="Path to reference mapping Excel/CSV file "
+        "(required only for the Akumulasi workflow)",
+    )
+    workflow_id: str = Field(
+        default="akumulasi",
+        description="Selected workflow id "
+        "(akumulasi | rincian-vol-tf | rincian-portal-bg)",
     )
     output_report_path: Path = Field(
         default=Path("./Financial_Summary_Report.xlsx"),
@@ -35,6 +42,18 @@ class ProcessingConfig(BaseModel):
     )
 
     model_config = {"frozen": True, "arbitrary_types_allowed": True}
+
+    @field_validator("workflow_id")
+    @classmethod
+    def _validate_workflow_id(cls, value: str) -> str:
+        """Normalizes/validates the workflow id against the registered enum.
+
+        Imported lazily so this schema stays decoupled from the workflows
+        package (which depends on the engines, which depend on this module).
+        """
+        from .workflows.base import WorkflowId
+
+        return WorkflowId(value).value
 
 
 @dataclass(frozen=True)

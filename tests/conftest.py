@@ -10,13 +10,21 @@ import pytest
 
 @pytest.fixture
 def raw_pipe_file(tmp_path: Path) -> Path:
-    """A valid 3-field pipe-delimited raw file with 4 data rows."""
+    """A valid pipe-delimited Akumulasi raw file with 4 data rows.
+
+    Includes an FBI column (summed by the Akumulasi workflow) alongside
+    VOLUME_IN_IDR. FBI totals by MAIN_CODE after enrichment:
+        0001 -> MC10: 100 + 200 = 300
+        0002 -> MC20: 50.25
+        0003 -> UNMAPPED: 10
+    Volume totals are unchanged from the original 4-row fixture.
+    """
     content = (
-        "KODE_UKER|SEGMEN|VOLUME_IN_IDR\n"
-        "0001|Wholesale|1250000000000\n"
-        "0002|Corporate|500000000.50\n"
-        "0001|Wholesale|250000000000\n"
-        "0003|Retail|1000000\n"
+        "KODE_UKER|SEGMEN|FBI|VOLUME_IN_IDR\n"
+        "0001|Wholesale|100|1250000000000\n"
+        "0002|Corporate|50.25|500000000.50\n"
+        "0001|Wholesale|200|250000000000\n"
+        "0003|Retail|10|1000000\n"
     )
     path = tmp_path / "raw_data.txt"
     path.write_text(content, encoding="utf-8")
@@ -205,4 +213,42 @@ def reference_file_unresolvable(tmp_path: Path) -> Path:
     )
     path = tmp_path / "reference_unresolvable.xlsx"
     ref.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
+def rincian_vol_tf_file(tmp_path: Path) -> Path:
+    """Pipe-delimited sample for the Rincian Vol TF workflow.
+
+    Exercises Wholesale exclusion, a blank-SEGMEN row (must be kept), and a
+    branch (B03) whose only row is Wholesale (must drop out entirely).
+    Expected after processing: B01/Branch One = 2000, B02/Branch Two = 800.
+    """
+    content = (
+        "SEGMEN|MAINBR|MBDESC|AMOUNT_IN_IDR\n"
+        "Wholesale|B01|Branch One|1000\n"
+        "Corporate|B01|Branch One|2000\n"
+        "Retail|B02|Branch Two|500\n"
+        "|B02|Branch Two|300\n"
+        "Wholesale|B03|Branch Three|9999\n"
+    )
+    path = tmp_path / "rincian_vol_tf_sample.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def rincian_portal_bg_file(tmp_path: Path) -> Path:
+    """Pipe-delimited sample for the Rincian Portal BG workflow (no filtering).
+
+    Expected after processing: B01/Branch One = 3000, B02/Branch Two = 500.
+    """
+    content = (
+        "MAINBR|MBNAME|AMOUNT_IN_IDR\n"
+        "B01|Branch One|1000\n"
+        "B01|Branch One|2000\n"
+        "B02|Branch Two|500\n"
+    )
+    path = tmp_path / "rincian_portal_bg_sample.csv"
+    path.write_text(content, encoding="utf-8")
     return path

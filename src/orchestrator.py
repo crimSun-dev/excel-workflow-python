@@ -1,60 +1,41 @@
 """Pipeline Orchestrator (TDD Section 3.6).
 
-Coordinates execution across Ingestion, Enrichment, Aggregation, and Export
-layers with a single exception boundary. Owns execution state and captures
-telemetry (timing, record counts, unmapped counts) into a PipelineReport.
+Owns the single exception boundary and telemetry (timing, record counts) for a
+pipeline run. Workflow-specific ingest/enrich/aggregate/export logic is
+delegated to the selected `WorkflowStrategy` resolved from `WORKFLOW_REGISTRY`,
+so adding a workflow never touches this dispatcher.
 """
 
 from __future__ import annotations
 
 import time
 
-from .aggregation import AggregationEngine
-from .enrichment import ReferenceEnricher
-from .exporter import ExcelReportExporter
-from .ingestion import IngestionEngine
 from .schemas import PipelineReport, ProcessingConfig
+from .workflows.registry import get_strategy
 
 
 class PipelineOrchestrator:
-    """Coordinates the full ETL flow synchronously."""
+    """Coordinates the full ETL flow synchronously via the workflow registry."""
 
     @staticmethod
     def execute(config: ProcessingConfig) -> PipelineReport:
-        """Executes the full ETL flow with exception boundary handling.
+        """Executes the selected workflow with exception boundary handling.
 
         Never raises for expected pipeline failures; instead returns a
         PipelineReport with success=False and a user-facing error_message.
         """
         start = time.perf_counter()
         try:
-            ingestion = IngestionEngine(delimiter=config.delimiter)
-            ingested = ingestion.read_raw_data(config.raw_data_path)
-
-            enricher = ReferenceEnricher(
-                reference_path=config.reference_data_path,
-                lookup_key=config.lookup_key,
-            )
-            enriched = enricher.enrich(ingested.data)
-
-            aggregator = AggregationEngine(segment_filter=config.segmen_filter)
-            aggregated = aggregator.aggregate(enriched.data)
-
-            exporter = ExcelReportExporter(number_format=config.number_format)
-            output_path = exporter.export(
-                summary_df=aggregated.summary_data,
-                enriched_df=enriched.data,
-                output_path=config.output_report_path,
-                segment_filter_applied=config.segmen_filter,
-            )
+            strategy = get_strategy(config.workflow_id)
+            result = strategy.execute(config)
 
             elapsed = time.perf_counter() - start
             return PipelineReport(
                 success=True,
-                output_path=output_path,
+                output_path=result.output_path,
                 execution_time_seconds=round(elapsed, 4),
-                total_records_processed=ingested.total_rows,
-                unmapped_records_count=enriched.unmapped_count,
+                total_records_processed=result.total_records_processed,
+                unmapped_records_count=result.unmapped_records_count,
                 error_message=None,
             )
         except Exception as exc:  # noqa: BLE001 - boundary: surface, never crash

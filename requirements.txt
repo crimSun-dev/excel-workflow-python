@@ -2,4 +2,7 @@ pandas~=2.2.0
 openpyxl~=3.1.0
 pydantic~=2.7
 typer~=0.12.0
+# Typer 0.12.x is incompatible with Click >= 8.2 (argument-parsing / make_metavar
+# API break). Pin below 8.2 so the CLI parses options correctly.
+click>=8.0,<8.2
 pytest~=8.2.0

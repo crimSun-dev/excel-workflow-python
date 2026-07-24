@@ -19,6 +19,9 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 VALUE_COLUMN = "VOLUME_IN_IDR"
 
+_DEFAULT_REPORT_TITLE = "Financial Summary Report"
+_DEFAULT_DETAIL_SHEET = "Enriched_Data"
+
 # Corporate styling palette (TDD 1.3).
 _HEADER_FILL = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
@@ -36,8 +39,32 @@ class ExportError(Exception):
 class ExcelReportExporter:
     """Formats and exports summary and row-level datasets to an openpyxl workbook."""
 
-    def __init__(self, number_format: str = "#,##0.00"):
+    def __init__(
+        self,
+        number_format: str = "#,##0.00",
+        value_column: str = VALUE_COLUMN,
+        report_title: str = _DEFAULT_REPORT_TITLE,
+        detail_sheet_name: str = _DEFAULT_DETAIL_SHEET,
+        value_columns: tuple[str, ...] | None = None,
+        display_names: dict[str, str] | None = None,
+    ):
         self.number_format = number_format
+        # Parameterized so each workflow can supply its own value column
+        # (VOLUME_IN_IDR vs AMOUNT_IN_IDR), report heading, and detail tab name.
+        self.value_column = value_column
+        # Ordered value columns to number-format and Grand-Total. Defaults to the
+        # single `value_column` so single-value workflows are unaffected.
+        self.value_columns = tuple(value_columns) if value_columns else (value_column,)
+        # Internal column -> report header overrides (e.g. FBI -> Sum of FBI).
+        self.display_names = dict(display_names or {})
+        self.report_title = report_title
+        self.detail_sheet_name = detail_sheet_name
+
+    def _value_col_indices(self, columns: list[str]) -> set[int]:
+        """1-based positions of the value columns present in `columns`."""
+        return {
+            columns.index(c) + 1 for c in self.value_columns if c in columns
+        }
 
     def export(
         self,
@@ -71,7 +98,7 @@ class ExcelReportExporter:
             summary_ws, summary_df, segment_filter_applied, len(enriched_df)
         )
 
-        enriched_ws = workbook.create_sheet("Enriched_Data")
+        enriched_ws = workbook.create_sheet(self.detail_sheet_name)
         self._write_enriched_sheet(enriched_ws, enriched_df)
 
         try:
@@ -96,7 +123,7 @@ class ExcelReportExporter:
         """Writes the metadata block, pivot table, and Grand Total row."""
         # --- Metadata header block ---
         meta = [
-            ("Financial Summary Report", ""),
+            (self.report_title, ""),
             ("Processing Timestamp:", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             ("Total Records Processed:", f"{total_records:,}"),
             ("Filter Applied (SEGMEN):", segment_filter_applied or "None (All Segments)"),
@@ -112,37 +139,40 @@ class ExcelReportExporter:
         header_row = ws.max_row + 2  # blank spacer row before the table
         columns = list(summary_df.columns)
 
-        # --- Column headers ---
+        # --- Column headers (with optional display-name overrides) ---
         for col_idx, col_name in enumerate(columns, start=1):
-            cell = ws.cell(row=header_row, column=col_idx, value=col_name)
+            header_text = self.display_names.get(col_name, col_name)
+            cell = ws.cell(row=header_row, column=col_idx, value=header_text)
             cell.font = _HEADER_FONT
             cell.fill = _HEADER_FILL
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = _BORDER
 
         # --- Data rows ---
-        value_col_idx = columns.index(VALUE_COLUMN) + 1 if VALUE_COLUMN in columns else None
+        value_col_indices = self._value_col_indices(columns)
         first_data_row = header_row + 1
         for r_offset, (_, record) in enumerate(summary_df.iterrows()):
             excel_row = first_data_row + r_offset
             for col_idx, col_name in enumerate(columns, start=1):
                 value = record[col_name]
                 cell = ws.cell(row=excel_row, column=col_idx)
-                if col_idx == value_col_idx:
+                if col_idx in value_col_indices:
                     cell.value = float(value)
                     cell.number_format = self.number_format
                 else:
                     cell.value = value
                 cell.border = _BORDER
 
-        # --- Grand Total row ---
+        # --- Grand Total row (totals every value column) ---
         total_row = first_data_row + len(summary_df)
         ws.cell(row=total_row, column=1, value="Grand Total").font = _TOTAL_FONT
-        if value_col_idx is not None and not summary_df.empty:
-            total_value = float(summary_df[VALUE_COLUMN].sum())
-            total_cell = ws.cell(row=total_row, column=value_col_idx, value=total_value)
-            total_cell.number_format = self.number_format
-            total_cell.font = _TOTAL_FONT
+        if not summary_df.empty:
+            for col_idx in value_col_indices:
+                col_name = columns[col_idx - 1]
+                total_value = float(summary_df[col_name].sum())
+                total_cell = ws.cell(row=total_row, column=col_idx, value=total_value)
+                total_cell.number_format = self.number_format
+                total_cell.font = _TOTAL_FONT
         for col_idx in range(1, len(columns) + 1):
             cell = ws.cell(row=total_row, column=col_idx)
             cell.fill = _TOTAL_FILL
@@ -160,13 +190,13 @@ class ExcelReportExporter:
             cell.alignment = Alignment(horizontal="center")
             cell.border = _BORDER
 
-        value_col_idx = columns.index(VALUE_COLUMN) + 1 if VALUE_COLUMN in columns else None
+        value_col_indices = self._value_col_indices(columns)
         for r_offset, (_, record) in enumerate(enriched_df.iterrows()):
             excel_row = 2 + r_offset
             for col_idx, col_name in enumerate(columns, start=1):
                 value = record[col_name]
                 cell = ws.cell(row=excel_row, column=col_idx)
-                if col_idx == value_col_idx:
+                if col_idx in value_col_indices:
                     cell.value = float(value) if pd.notna(value) else 0.0
                     cell.number_format = self.number_format
                 else:

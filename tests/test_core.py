@@ -17,7 +17,7 @@ from src.ingestion import DataIngestionError, IngestionEngine
 # --------------------------------------------------------------------------- #
 def test_ingest_reads_valid_pipe_delimited_file(raw_pipe_file):
     result = IngestionEngine().read_raw_data(raw_pipe_file)
-    assert list(result.data.columns) == ["KODE_UKER", "SEGMEN", "VOLUME_IN_IDR"]
+    assert list(result.data.columns) == ["KODE_UKER", "SEGMEN", "FBI", "VOLUME_IN_IDR"]
     assert result.total_rows == 4
     assert result.malformed_rows_count == 0
     assert result.data["VOLUME_IN_IDR"].dtype == "float64"

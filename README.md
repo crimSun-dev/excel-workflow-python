@@ -28,12 +28,25 @@ delete the `.venv` folder, and run the batch file again. Or use the standalone
 |---|---|---|
 | Text to Columns (pipe `\|` delimiter) | Parse pipe-delimited raw file | `src/ingestion.py` |
 | VLOOKUP against reference workbook | Left-join `KODE_UKER` → `MAIN_CODE`, `MAIN_BRANCH` | `src/enrichment.py` |
-| PivotTable (Sum of `VOLUME_IN_IDR`) | Group-by + sum, optional `SEGMEN` filter | `src/aggregation.py` |
-| Tabular layout, no subtotals, `#,##0.00` format | Styled `.xlsx` export + Grand Total | `src/exporter.py` |
+| PivotTable (Sum of value column) | Group-by + sum, optional `SEGMEN` include/exclude | `src/aggregation.py` |
+| Tabular layout, no subtotals | Styled `.xlsx` export + Grand Total | `src/exporter.py` |
 
-Output is a two-sheet workbook:
-- **Summary_Report** — tabular pivot view, corporate styling, Grand Total, explicit `#,##0.00` numeric format (no `E+12` scientific notation).
-- **Enriched_Data** — full row-level audit trail.
+## Workflows
+
+Pick a workflow in the GUI dropdown or via the CLI `--workflow` flag. Each is a
+`WorkflowStrategy` (see `src/workflows/`) sharing one ingest → optional enrich →
+aggregate → export skeleton, dispatched through `WORKFLOW_REGISTRY`.
+
+| Workflow (`--workflow`) | Reference file | Grouped by | Sums | SEGMEN rule | Number format |
+|---|---|---|---|---|---|
+| Report Summary Akumulasi (`akumulasi`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | `VOLUME_IN_IDR` | Optional include filter | `#,##0.00` |
+| Rincian Vol TF (`rincian-vol-tf`) | Not used | `MAINBR`, `MBDESC` | `AMOUNT_IN_IDR` | Excludes `Wholesale` (blank kept) | `#,##0` |
+| Rincian Portal BG (`rincian-portal-bg`) | Not used | `MAINBR`, `MBNAME` | `AMOUNT_IN_IDR` | None | `#,##0` |
+
+Every workflow produces a two-sheet workbook: a **Summary_Report** (tabular
+view, corporate styling, Grand Total, explicit numeric format — no `E+12`
+scientific notation) plus a row-level detail sheet (**Enriched_Data** for
+Akumulasi, **Detail_Data** for the Rincian workflows).
 
 ## Install
 
@@ -46,17 +59,25 @@ pip install -r requirements.txt
 ### CLI
 
 ```bash
+# Akumulasi (default) — reference file required
 python -m src.cli process --raw sample_data/raw_data.txt --ref sample_data/reference.xlsx --out report.xlsx
+
+# Rincian Vol TF — no reference file
+python -m src.cli process --raw vol_tf.csv --workflow rincian-vol-tf --out vol_tf_report.xlsx
+
+# Rincian Portal BG — no reference file
+python -m src.cli process --raw portal_bg.csv --workflow rincian-portal-bg --out portal_bg_report.xlsx
 ```
 
 Options:
 
 | Flag | Alias | Description |
 |---|---|---|
-| `--raw` | `-r` | Path to raw pipe-delimited `.txt` file (required) |
-| `--ref` | `-f` | Path to reference mapping `.xlsx`/`.csv` (required) |
+| `--raw` | `-r` | Path to raw pipe-delimited `.txt`/`.csv` file (required) |
+| `--workflow` | `-w` | Workflow: `akumulasi` (default), `rincian-vol-tf`, `rincian-portal-bg` |
+| `--ref` | `-f` | Path to reference mapping `.xlsx`/`.csv` (required for `akumulasi` only) |
 | `--out` | `-o` | Output report path (default `./Financial_Summary_Report.xlsx`) |
-| `--segment` | `-s` | Optional `SEGMEN` filter (e.g. `Wholesale`, `Corporate`) |
+| `--segment` | `-s` | Optional `SEGMEN` filter (Akumulasi only; e.g. `Wholesale`, `Corporate`) |
 | `--delimiter` | `-d` | Raw file delimiter (default `\|`) |
 | `--gui` | `-g` | Launch the GUI file picker instead |
 
@@ -66,12 +87,17 @@ Options:
 python main.py
 ```
 
-Launches a native Tkinter file-picker dialog — select the raw file, reference
-workbook, optional filter, and output path, then click **Run Pipeline**.
+Launches a native Tkinter file-picker dialog — pick a **workflow** from the
+dropdown, select the raw file, (for Akumulasi) a reference workbook, an optional
+filter, and an output path, then click **Run Pipeline**. The reference-file row
+is shown only for the Akumulasi workflow.
 
 ## Input format
 
-Raw file (`raw_data.txt`), pipe-delimited with a header row:
+All workflows read a pipe-delimited file with a header row. The required
+columns depend on the selected workflow:
+
+**Akumulasi** (`raw_data.txt`):
 
 ```
 KODE_UKER|SEGMEN|VOLUME_IN_IDR
@@ -79,7 +105,25 @@ KODE_UKER|SEGMEN|VOLUME_IN_IDR
 0002|Corporate|500000000.50
 ```
 
-Reference workbook (`reference.xlsx`) must contain a lookup key column plus a
+**Rincian Vol TF** (`SEGMEN`, `MAINBR`, `MBDESC`, `AMOUNT_IN_IDR`; rows where
+`SEGMEN` = `Wholesale` are excluded, blank/null `SEGMEN` rows are kept):
+
+```
+SEGMEN|MAINBR|MBDESC|AMOUNT_IN_IDR
+Wholesale|B01|Branch One|1000
+Corporate|B01|Branch One|2000
+|B02|Branch Two|300
+```
+
+**Rincian Portal BG** (`MAINBR`, `MBNAME`, `AMOUNT_IN_IDR`; no segment filter):
+
+```
+MAINBR|MBNAME|AMOUNT_IN_IDR
+B01|Branch One|1000
+B02|Branch Two|500
+```
+
+The Akumulasi reference workbook (`reference.xlsx`) must contain a lookup key column plus a
 code/branch pair. Canonical headers are `KODE_UKER`, `MAIN_CODE`, `MAIN_BRANCH`,
 but common alternate names are resolved automatically (case-insensitive, first
 match wins):
@@ -102,11 +146,13 @@ and reported (never abort the run).
 python -m pytest
 ```
 
-26 tests cover ingestion (encoding fallback, whitespace, malformed rows),
-enrichment (matching, unmapped flagging, column-alias/multi-sheet resolution,
-error handling), aggregation
-(grouping, decimal precision, segment filter), Excel export (sheets, number
-format, Grand Total, column widths), and full end-to-end pipeline runs.
+40 tests cover ingestion (encoding fallback, whitespace, malformed rows,
+per-workflow numeric coercion), enrichment (matching, unmapped flagging,
+column-alias/multi-sheet resolution, error handling), aggregation (grouping,
+decimal precision, segment include/exclude filters), the multi-workflow registry
+and the two new workflows (Wholesale exclusion, blank-segment handling, no
+filter, missing-column validation), Excel export (sheets, number format, Grand
+Total, column widths), and full end-to-end pipeline runs.
 
 ## Build a standalone .exe
 
@@ -125,12 +171,18 @@ that runs on a clean Windows machine without Python installed.
 │   ├── schemas.py        # Pydantic config + immutable result dataclasses
 │   ├── ingestion.py      # Text-to-Columns equivalent
 │   ├── enrichment.py     # VLOOKUP equivalent
-│   ├── aggregation.py    # PivotTable equivalent
-│   ├── exporter.py       # openpyxl styled report writer
-│   ├── orchestrator.py   # Coordinates the ETL flow + telemetry
-│   ├── cli.py            # Typer CLI
-│   └── gui.py            # Tkinter file-picker fallback
-├── tests/               # pytest suite (22 tests)
+│   ├── aggregation.py    # PivotTable equivalent (include/exclude SEGMEN)
+│   ├── exporter.py       # openpyxl styled report writer (parameterized)
+│   ├── orchestrator.py   # Exception boundary + telemetry; dispatches to a workflow
+│   ├── workflows/        # Strategy pattern: WorkflowId, definitions, registry
+│   │   ├── base.py           # WorkflowId, WorkflowDefinition, WorkflowStrategy ABC
+│   │   ├── akumulasi.py      # Report Summary Akumulasi (enrichment-backed)
+│   │   ├── rincian_vol_tf.py # Rincian Vol TF (excludes Wholesale)
+│   │   ├── rincian_portal_bg.py  # Rincian Portal BG (no filter)
+│   │   └── registry.py       # WORKFLOW_REGISTRY + get_strategy()
+│   ├── cli.py            # Typer CLI (--workflow)
+│   └── gui.py            # Tkinter file-picker fallback (workflow dropdown)
+├── tests/               # pytest suite (40 tests)
 ├── sample_data/         # Example raw + reference files
 ├── main.py              # Entry point (GUI when run with no args)
 ├── build_exe.py         # PyInstaller build script

@@ -38,7 +38,18 @@ def _print_report(report) -> None:
 @app.command()
 def process(
     raw_data: Path = typer.Option(..., "--raw", "-r", help="Path to raw_data.txt"),
-    reference: Path = typer.Option(..., "--ref", "-f", help="Path to reference.xlsx"),
+    workflow: str = typer.Option(
+        "akumulasi",
+        "--workflow",
+        "-w",
+        help="Workflow: akumulasi | rincian-vol-tf | rincian-portal-bg",
+    ),
+    reference: Optional[Path] = typer.Option(
+        None,
+        "--ref",
+        "-f",
+        help="Path to reference.xlsx (required only for the akumulasi workflow)",
+    ),
     output: Path = typer.Option(
         Path("./Financial_Summary_Report.xlsx"),
         "--out",
@@ -60,9 +71,32 @@ def process(
         launch_gui()
         raise typer.Exit(code=0)
 
+    from .workflows.base import WorkflowId
+
+    try:
+        workflow_id = WorkflowId(workflow).value
+    except ValueError:
+        valid = ", ".join(w.value for w in WorkflowId)
+        typer.secho(
+            f"\n[FAILED] Unknown workflow '{workflow}'. Valid options: {valid}",
+            fg=typer.colors.RED,
+            bold=True,
+        )
+        raise typer.Exit(code=1)
+
+    if workflow_id == WorkflowId.AKUMULASI.value and reference is None:
+        typer.secho(
+            "\n[FAILED] The 'akumulasi' workflow requires --ref/-f (a reference "
+            "mapping file).",
+            fg=typer.colors.RED,
+            bold=True,
+        )
+        raise typer.Exit(code=1)
+
     config = ProcessingConfig(
         raw_data_path=raw_data,
         reference_data_path=reference,
+        workflow_id=workflow_id,
         output_report_path=output,
         segmen_filter=segment,
         delimiter=delimiter,

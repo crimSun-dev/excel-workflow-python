@@ -1,0 +1,174 @@
+"""Workflow strategy contracts and the shared execution skeleton.
+
+Defines the `WorkflowId` enum, the declarative `WorkflowDefinition` used to
+configure each pipeline, and the `WorkflowStrategy` ABC whose `execute()`
+template method runs the shared ingest -> optional enrich -> aggregate -> export
+flow. Concrete strategies override only the hooks that differ.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import pandas as pd
+
+from ..aggregation import AggregationEngine
+from ..exporter import ExcelReportExporter
+from ..ingestion import IngestionEngine
+
+if TYPE_CHECKING:
+    from ..schemas import ProcessingConfig
+
+
+class WorkflowId(str, Enum):
+    """Stable identifiers for the supported report workflows."""
+
+    AKUMULASI = "akumulasi"
+    RINCIAN_VOL_TF = "rincian-vol-tf"
+    RINCIAN_PORTAL_BG = "rincian-portal-bg"
+
+
+class WorkflowValidationError(Exception):
+    """Raised when input data is missing columns required by the workflow."""
+
+
+@dataclass(frozen=True)
+class WorkflowDefinition:
+    """Declarative configuration for one workflow's ingest/aggregate/export."""
+
+    workflow_id: WorkflowId
+    label: str  # human-facing name, e.g. "Report Summary Akumulasi"
+    requires_reference: bool
+    group_cols: tuple[str, ...]
+    value_col: str
+    report_title: str
+    detail_sheet_name: str
+    number_format: str = "#,##0.00"
+    numeric_columns: tuple[str, ...] = ()
+    required_columns: tuple[str, ...] = ()
+    exclude_segmen: tuple[str, ...] = ()
+    supports_segment_filter: bool = False
+    # Ordered value columns to aggregate. Empty => single-column workflow that
+    # sums only `value_col` (backward-compatible with Rincian Vol TF / Portal BG).
+    value_cols: tuple[str, ...] = ()
+    # Internal column -> report header overrides, e.g. ("FBI", "Sum of FBI").
+    value_display_names: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def resolved_value_cols(self) -> tuple[str, ...]:
+        """Ordered value columns to aggregate; falls back to single `value_col`."""
+        return self.value_cols if self.value_cols else (self.value_col,)
+
+    @property
+    def display_name_map(self) -> dict[str, str]:
+        """Internal column -> report header overrides (e.g. FBI -> Sum of FBI)."""
+        return dict(self.value_display_names)
+
+
+@dataclass(frozen=True)
+class WorkflowRunResult:
+    """Telemetry returned by a strategy for the orchestrator to report on."""
+
+    output_path: Path
+    total_records_processed: int
+    unmapped_records_count: int = 0
+
+
+class WorkflowStrategy(ABC):
+    """Base class implementing the shared workflow execution skeleton."""
+
+    @property
+    @abstractmethod
+    def definition(self) -> WorkflowDefinition:
+        """The declarative configuration for this workflow."""
+
+    def execute(self, config: "ProcessingConfig") -> WorkflowRunResult:
+        """Runs ingest -> optional enrich -> aggregate -> export.
+
+        Raises:
+            WorkflowValidationError / DataIngestionError / ExportError /
+            ReferenceEnrichmentError: surfaced to the orchestrator's boundary.
+        """
+        definition = self.definition
+
+        # 1. Ingest raw pipe-delimited data, coercing this workflow's money cols.
+        ingestion = IngestionEngine(
+            delimiter=config.delimiter,
+            numeric_columns=definition.numeric_columns or ("VOLUME_IN_IDR",),
+        )
+        ingested = ingestion.read_raw_data(config.raw_data_path)
+        data = ingested.data
+
+        # 2. Validate that mandatory input columns are present up front.
+        self._validate_columns(data)
+
+        # 3. Optional reference enrichment (Akumulasi only).
+        data, unmapped_count = self._enrich(config, data)
+
+        # 4. Aggregate (group + sum, with inclusion/exclusion SEGMEN handling).
+        aggregator = AggregationEngine(
+            segment_filter=(
+                config.segmen_filter if definition.supports_segment_filter else None
+            ),
+            exclude_segmen=list(definition.exclude_segmen) or None,
+        )
+        aggregated = aggregator.aggregate(
+            data,
+            group_cols=list(definition.group_cols),
+            value_col=definition.value_col,
+            value_cols=list(definition.resolved_value_cols),
+        )
+
+        # 5. Export the parameterized styled workbook.
+        exporter = ExcelReportExporter(
+            number_format=definition.number_format,
+            value_column=definition.value_col,
+            value_columns=definition.resolved_value_cols,
+            display_names=definition.display_name_map,
+            report_title=definition.report_title,
+            detail_sheet_name=definition.detail_sheet_name,
+        )
+        output_path = exporter.export(
+            summary_df=aggregated.summary_data,
+            enriched_df=data,
+            output_path=config.output_report_path,
+            segment_filter_applied=self._filter_label(config),
+        )
+
+        return WorkflowRunResult(
+            output_path=output_path,
+            total_records_processed=ingested.total_rows,
+            unmapped_records_count=unmapped_count,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Hooks (overridable)
+    # ------------------------------------------------------------------ #
+    def _enrich(
+        self, config: "ProcessingConfig", data: pd.DataFrame
+    ) -> tuple[pd.DataFrame, int]:
+        """Default: no enrichment. Returns the data untouched, 0 unmapped."""
+        return data, 0
+
+    def _filter_label(self, config: "ProcessingConfig") -> str | None:
+        """Human-readable filter description for the report metadata block."""
+        definition = self.definition
+        if definition.exclude_segmen:
+            return f"{', '.join(definition.exclude_segmen)} (excluded)"
+        if definition.supports_segment_filter and config.segmen_filter:
+            return config.segmen_filter
+        return None
+
+    def _validate_columns(self, data: pd.DataFrame) -> None:
+        """Raises WorkflowValidationError listing any missing input columns."""
+        missing = [c for c in self.definition.required_columns if c not in data.columns]
+        if missing:
+            raise WorkflowValidationError(
+                f"Workflow '{self.definition.label}' requires column(s) "
+                f"{missing} which are absent from the input file. "
+                f"Available columns: {list(data.columns)}"
+            )
