@@ -2,42 +2,66 @@
 
 Native OS file-picker dialog launched when the user runs the app with no CLI
 arguments. Lets a non-technical user pick a workflow, select the raw file,
-(for Akumulasi) a reference workbook, an optional SEGMEN filter, and an output
-path, then runs the pipeline. The reference-file row is shown only for the
-Akumulasi workflow, which is the only one that needs it.
+(for Akumulasi) a reference workbook, an optional SEGMEN filter, an optional
+SOURCE exclusion list, and an output path, then runs the pipeline. The
+reference-file row is shown only for the workflows that need it, and the SOURCE
+field is enabled only for workflows declaring `has_source_filter`.
+
+The small pure helpers below (`source_filter_enabled`, `default_source_text`,
+`parse_source_exclude`) hold the field's behavior so it is testable without a
+display server; `launch_gui` only wires them to widgets.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from .branding import PRODUCT_BYLINE, PRODUCT_NAME, logo_path
+from .branding import PRODUCT_NAME
 from .orchestrator import PipelineOrchestrator
-from .schemas import ProcessingConfig
+from .schemas import PipelineReport, ProcessingConfig
 from .workflows.base import WorkflowId
 from .workflows.registry import get_definition
 
 
-def _load_logo_image(tk_module) -> "object | None":
-    """Loads the crimSun logo as a header-sized PhotoImage, or None on failure.
+def source_filter_enabled(workflow_id: WorkflowId | str) -> bool:
+    """Whether the SOURCE field accepts input for this workflow."""
+    return get_definition(workflow_id).has_source_filter
 
-    Tolerates a missing/invalid asset (returns None) so the GUI never fails
-    solely because the logo could not load.
+
+def default_source_text(workflow_id: WorkflowId | str) -> str:
+    """The workflow's configured SOURCE exclusion list as GUI text (e.g. 'CMS')."""
+    definition = get_definition(workflow_id)
+    if not definition.has_source_filter:
+        return ""
+    return ", ".join(definition.source_exclude)
+
+
+def parse_source_exclude(text: str) -> list[str]:
+    """Splits the SOURCE field on commas into a trimmed exclusion list.
+
+    An empty/whitespace-only field yields `[]`, which explicitly means "exclude
+    nothing" - the operator clearing the field is a deliberate instruction, not
+    a request to fall back to the workflow default.
     """
-    path = logo_path()
-    if path is None:
+    return [token.strip() for token in text.split(",") if token.strip()]
+
+
+def unmapped_warning_text(report: PipelineReport) -> str | None:
+    """Operator-facing text for a near-total UNMAPPED join, or None if healthy.
+
+    Returned only when the pipeline itself flagged the join as effectively
+    failed. The report was still written, so this reads as a "check your inputs"
+    warning rather than an error.
+    """
+    if not report.success or not report.unmapped_diagnostic:
         return None
-    try:
-        image = tk_module.PhotoImage(file=str(path))
-    except Exception:  # noqa: BLE001 - logo is decorative; never block the GUI
-        return None
-    # Integer-subsample a large source down to ~64px tall for the header.
-    target = 64
-    height = image.height() or target
-    factor = max(1, round(height / target))
-    if factor > 1:
-        image = image.subsample(factor, factor)
-    return image
+    return (
+        "The report was still written, but almost every ID failed to match the "
+        "master lookup, so the Summary will be nearly empty.\n\n"
+        f"{report.unmapped_diagnostic}\n\n"
+        "Check that the correct master-data file was selected and that its ID "
+        "column holds the same values as the raw file."
+    )
 
 
 def launch_gui() -> None:
@@ -47,17 +71,8 @@ def launch_gui() -> None:
 
     root = tk.Tk()
     root.title(PRODUCT_NAME)
-    root.geometry("640x500")
+    root.geometry("640x540")
     root.resizable(False, False)
-
-    # Load the logo once; keep references on root so Tk does not GC the images.
-    logo_image = _load_logo_image(tk)
-    root._logo_img = logo_image  # type: ignore[attr-defined]
-    if logo_image is not None:
-        try:
-            root.iconphoto(True, logo_image)
-        except Exception:  # noqa: BLE001 - window icon is best-effort
-            pass
 
     state: dict[str, Path | None] = {
         "raw": None,
@@ -77,6 +92,7 @@ def launch_gui() -> None:
     master_var = tk.StringVar(value="No file selected")
     out_var = tk.StringVar(value="./Financial_Summary_Report.xlsx")
     seg_var = tk.StringVar(value="")
+    source_var = tk.StringVar(value=default_source_text(WorkflowId.AKUMULASI))
 
     def selected_workflow_id() -> str:
         return workflow_choices[workflow_var.get()]
@@ -141,6 +157,13 @@ def launch_gui() -> None:
             return
         output = state["out"] or Path(out_var.get())
         segment = seg_var.get().strip() or None
+        # A disabled SOURCE field must never influence the run, so its value is
+        # only read for workflows that expose it.
+        source_exclude = (
+            parse_source_exclude(source_var.get())
+            if definition.has_source_filter
+            else None
+        )
         config = ProcessingConfig(
             raw_data_path=state["raw"],
             reference_data_path=state["ref"] if needs_ref else None,
@@ -148,6 +171,7 @@ def launch_gui() -> None:
             workflow_id=workflow_id,
             output_report_path=output,
             segmen_filter=segment,
+            source_exclude=source_exclude,
         )
         report = PipelineOrchestrator.execute(config)
         if report.success:
@@ -158,22 +182,22 @@ def launch_gui() -> None:
                 f"Unmapped records: {report.unmapped_records_count:,}\n"
                 f"Time: {report.execution_time_seconds}s",
             )
+            # Shown after the success box so the operator cannot miss a join
+            # that silently produced an almost-empty Summary.
+            warning = unmapped_warning_text(report)
+            if warning:
+                messagebox.showwarning("Master ID lookup failed", warning)
         else:
             messagebox.showerror("Pipeline failed", report.error_message or "Unknown error")
 
     pad = {"padx": 10, "pady": 6}
 
-    # --- Branded header: logo (if available) + product name + byline ---
+    # --- Product header ---
     header = ttk.Frame(root)
     header.grid(row=0, column=0, columnspan=3, **pad)
-    if logo_image is not None:
-        ttk.Label(header, image=logo_image).pack(side="left", padx=(0, 12))
-    text_col = ttk.Frame(header)
-    text_col.pack(side="left")
-    ttk.Label(text_col, text=PRODUCT_NAME, font=("Segoe UI", 16, "bold")).pack(
+    ttk.Label(header, text=PRODUCT_NAME, font=("Segoe UI", 16, "bold")).pack(
         anchor="w"
     )
-    ttk.Label(text_col, text=PRODUCT_BYLINE, font=("Segoe UI", 10)).pack(anchor="w")
 
     # --- Workflow selector ---
     ttk.Label(root, text="Workflow:").grid(row=1, column=0, sticky="e", **pad)
@@ -217,13 +241,25 @@ def launch_gui() -> None:
         row=6, column=1, columnspan=2, sticky="w", **pad
     )
 
+    source_field_label = ttk.Label(root, text="SOURCE filter (excluded):")
+    source_field_label.grid(row=7, column=0, **pad)
+    source_entry = ttk.Entry(root, textvariable=source_var, width=30)
+    source_entry.grid(row=7, column=1, columnspan=2, sticky="w", **pad)
+
     ttk.Button(root, text="Run Pipeline", command=run, width=22).grid(
-        row=7, column=0, columnspan=3, **pad
+        row=8, column=0, columnspan=3, **pad
     )
 
     def toggle_optional_rows(*_args: object) -> None:
-        """Show reference / master rows only for workflows that require them."""
-        definition = get_definition(selected_workflow_id())
+        """Show reference / master rows and the SOURCE field per workflow needs."""
+        workflow_id = selected_workflow_id()
+        definition = get_definition(workflow_id)
+        # SOURCE field: enabled and pre-populated with the workflow's configured
+        # exclusion list, greyed out (and blanked) for every other workflow.
+        source_var.set(default_source_text(workflow_id))
+        enabled = source_filter_enabled(workflow_id)
+        source_entry.configure(state="normal" if enabled else "disabled")
+        source_field_label.configure(state="normal" if enabled else "disabled")
         if definition.requires_reference:
             ref_button.grid()
             ref_label.grid()

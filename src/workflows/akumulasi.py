@@ -26,7 +26,6 @@ AKUMULASI_DEFINITION = WorkflowDefinition(
     value_col="VOLUME_IN_IDR",
     report_title="Financial Summary Report",
     detail_sheet_name="Enriched_Data",
-    number_format="#,##0.00",
     numeric_columns=("FBI", "VOLUME_IN_IDR"),
     required_columns=("FBI", "VOLUME_IN_IDR"),
     supports_segment_filter=True,

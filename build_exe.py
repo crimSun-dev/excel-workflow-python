@@ -10,7 +10,6 @@ Produces: dist/TongkatGaibExcel.exe
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 
@@ -38,11 +37,6 @@ _EXCLUDES = [
 
 
 def build() -> int:
-    # Bundle the crimSun logo into the one-file exe so the GUI/icon resolve it
-    # from sys._MEIPASS without a side-car assets folder. PyInstaller expects
-    # "SRC<os.pathsep>DEST_DIR"; the app looks under "assets/" at runtime.
-    logo_data = f"assets{os.sep}crimsun_logo.png{os.pathsep}assets"
-
     args = [
         sys.executable,
         "-m",
@@ -58,8 +52,6 @@ def build() -> int:
         "tkinter",
         "--collect-all",
         "pydantic",
-        "--add-data",
-        logo_data,
     ]
     for mod in _EXCLUDES:
         args += ["--exclude-module", mod]

@@ -2,14 +2,16 @@
 
 Writes a styled two-sheet workbook using openpyxl (no Excel install required):
     * Summary_Report  - tabular pivot view + Grand Total, corporate styling,
-                        explicit #,##0.00 number format (no scientific notation).
+                        plain integer cells (no comma/decimal separators).
     * Enriched_Data   - full row-level audit trail.
 """
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 from openpyxl import Workbook
@@ -31,6 +33,12 @@ _TOTAL_FONT = Font(bold=True)
 _THIN_SIDE = Side(style="thin", color="BFBFBF")
 _BORDER = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN_SIDE)
 
+# Plain integer display — matches manual paste-values (no thousands separator or
+# decimal point in the cell format).
+PLAIN_INTEGER_FORMAT = "0"
+
+NumericRounding = Literal["round", "ceil"]
+
 
 class ExportError(Exception):
     """Raised when writing or styling the Excel output file fails."""
@@ -41,14 +49,16 @@ class ExcelReportExporter:
 
     def __init__(
         self,
-        number_format: str = "#,##0.00",
+        number_format: str = PLAIN_INTEGER_FORMAT,
         value_column: str = VALUE_COLUMN,
         report_title: str = _DEFAULT_REPORT_TITLE,
         detail_sheet_name: str = _DEFAULT_DETAIL_SHEET,
         value_columns: tuple[str, ...] | None = None,
         display_names: dict[str, str] | None = None,
+        numeric_rounding: NumericRounding = "round",
     ):
         self.number_format = number_format
+        self.numeric_rounding = numeric_rounding
         # Parameterized so each workflow can supply its own value column
         # (VOLUME_IN_IDR vs AMOUNT_IN_IDR), report heading, and detail tab name.
         self.value_column = value_column
@@ -65,6 +75,20 @@ class ExcelReportExporter:
         return {
             columns.index(c) + 1 for c in self.value_columns if c in columns
         }
+
+    def _numeric_cell_value(self, value: object) -> int:
+        """Coerces a value to a plain integer stored in the cell.
+
+        Workflow 4 (Briva) rounds fractional cents up (``ceil``) so totals like
+        ``…603.75`` export as ``…604``, matching manual Excel. All other
+        workflows use standard ``round``. Missing values become 0.
+        """
+        if value is None or pd.isna(value):
+            value = 0
+        amount = float(value)
+        if self.numeric_rounding == "ceil":
+            return int(math.ceil(amount))
+        return int(round(amount))
 
     def export(
         self,
@@ -113,6 +137,7 @@ class ExcelReportExporter:
         category_columns: list[str],
         total_records: int,
         filter_applied: str | None = None,
+        unmapped_ids_count: int = 0,
     ) -> Path:
         """Writes a Count-style crosstab Summary_Report plus a detail sheet.
 
@@ -128,6 +153,7 @@ class ExcelReportExporter:
             category_columns: Ordered count columns (e.g. the two USER_AKTIF labels).
             total_records: Record count for the metadata block.
             filter_applied: Filter label for the report header block.
+            unmapped_ids_count: Count of distinct IDs that could not be mapped.
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +168,7 @@ class ExcelReportExporter:
             category_columns,
             filter_applied,
             total_records,
+            unmapped_ids_count=unmapped_ids_count,
         )
 
         detail_ws = workbook.create_sheet(self.detail_sheet_name)
@@ -170,6 +197,7 @@ class ExcelReportExporter:
         category_columns: list[str],
         filter_applied: str | None,
         total_records: int,
+        unmapped_ids_count: int = 0,
     ) -> None:
         """Writes the metadata block, the MAIN_CODE x category count grid, and totals."""
         # --- Metadata header block ---
@@ -179,6 +207,8 @@ class ExcelReportExporter:
             ("Total Records Processed:", f"{total_records:,}"),
             ("Filter Applied:", filter_applied or "None"),
         ]
+        if unmapped_ids_count > 0:
+            meta.append(("Unmapped IDs:", f"{unmapped_ids_count:,}"))
         for label, value in meta:
             row = ws.max_row + 1 if ws.max_row > 1 or ws["A1"].value else ws.max_row
             ws.cell(row=row, column=1, value=label).font = _TOTAL_FONT
@@ -211,12 +241,12 @@ class ExcelReportExporter:
                 col_totals[cat] += count
                 row_total += count
                 cell = ws.cell(row=excel_row, column=c_offset, value=count)
-                cell.number_format = "#,##0"
+                cell.number_format = self.number_format
                 cell.border = _BORDER
             total_cell = ws.cell(
                 row=excel_row, column=len(headers), value=row_total
             )
-            total_cell.number_format = "#,##0"
+            total_cell.number_format = self.number_format
             total_cell.border = _BORDER
 
         # --- Grand Total row ---
@@ -225,11 +255,11 @@ class ExcelReportExporter:
         grand_total = 0
         for c_offset, cat in enumerate(category_columns, start=2):
             cell = ws.cell(row=total_row, column=c_offset, value=col_totals[cat])
-            cell.number_format = "#,##0"
+            cell.number_format = self.number_format
             cell.font = _TOTAL_FONT
             grand_total += col_totals[cat]
         gt_cell = ws.cell(row=total_row, column=len(headers), value=grand_total)
-        gt_cell.number_format = "#,##0"
+        gt_cell.number_format = self.number_format
         gt_cell.font = _TOTAL_FONT
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=total_row, column=col_idx)
@@ -282,7 +312,7 @@ class ExcelReportExporter:
                 value = record[col_name]
                 cell = ws.cell(row=excel_row, column=col_idx)
                 if col_idx in value_col_indices:
-                    cell.value = float(value)
+                    cell.value = self._numeric_cell_value(value)
                     cell.number_format = self.number_format
                 else:
                     cell.value = value
@@ -294,7 +324,7 @@ class ExcelReportExporter:
         if not summary_df.empty:
             for col_idx in value_col_indices:
                 col_name = columns[col_idx - 1]
-                total_value = float(summary_df[col_name].sum())
+                total_value = self._numeric_cell_value(summary_df[col_name].sum())
                 total_cell = ws.cell(row=total_row, column=col_idx, value=total_value)
                 total_cell.number_format = self.number_format
                 total_cell.font = _TOTAL_FONT
@@ -322,7 +352,7 @@ class ExcelReportExporter:
                 value = record[col_name]
                 cell = ws.cell(row=excel_row, column=col_idx)
                 if col_idx in value_col_indices:
-                    cell.value = float(value) if pd.notna(value) else 0.0
+                    cell.value = self._numeric_cell_value(value)
                     cell.number_format = self.number_format
                 else:
                     cell.value = value
@@ -339,8 +369,7 @@ class ExcelReportExporter:
                 if cell.value is None:
                     continue
                 length = len(str(cell.value))
-                if cell.number_format and cell.number_format != "General":
-                    # Formatted numbers render wider than their raw repr.
+                if cell.number_format and cell.number_format not in ("General", "0"):
                     length = max(length, len(f"{cell.value:,.2f}") + 2)
                 widths[cell.column] = max(widths.get(cell.column, 0), length)
         for col_idx, width in widths.items():

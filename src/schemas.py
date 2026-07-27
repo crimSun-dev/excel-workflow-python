@@ -42,6 +42,13 @@ class ProcessingConfig(BaseModel):
     segmen_filter: Optional[str] = Field(
         default=None, description="Optional SEGMEN value to filter"
     )
+    source_exclude: Optional[list[str]] = Field(
+        default=None,
+        description="Runtime override for the workflow's SOURCE exclusion list. "
+        "None keeps the workflow definition's default (e.g. ['CMS'] for Qlola); "
+        "an empty list disables SOURCE filtering entirely. Ignored by workflows "
+        "that do not declare has_source_filter",
+    )
     number_format: str = Field(
         default="#,##0.00", description="Excel display format for IDR volume"
     )
@@ -99,3 +106,6 @@ class PipelineReport:
     total_records_processed: int
     unmapped_records_count: int
     error_message: Optional[str] = None
+    # Set when a join collapsed almost entirely to UNMAPPED. Advisory only:
+    # `success` stays True and the report file is still written.
+    unmapped_diagnostic: Optional[str] = None

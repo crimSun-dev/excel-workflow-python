@@ -20,6 +20,7 @@ from .base import (
     WorkflowId,
     WorkflowStrategy,
     WorkflowValidationError,
+    normalize_join_key,
 )
 
 TIMESERIES_FBI_BRIVA_DEFINITION = WorkflowDefinition(
@@ -30,7 +31,7 @@ TIMESERIES_FBI_BRIVA_DEFINITION = WorkflowDefinition(
     value_col="VOLUME_IDR",
     report_title="Time Series FBI Briva Report",
     detail_sheet_name="Enriched_Data",
-    number_format="#,##0.00",
+    numeric_rounding="ceil",
     numeric_columns=("VOLUME_IDR",),
     required_columns=("SEGMEN", "VOLUME_IDR"),
     # Definition-baked inclusion: only NONWHOLESALE rows contribute to the pivot.
@@ -54,6 +55,10 @@ class TimeSeriesFbiBrivaStrategy(WorkflowStrategy):
                 "The 'Time Series FBI Briva' workflow requires a reference "
                 "mapping file, but none was provided."
             )
+        # Briva exports spell the branch code as `KODE UKER`, `KODE_UKER` or
+        # `UKER`, sometimes numeric-typed or padded. Canonicalize at ingest so
+        # the enrichment join sees one well-formed string key.
+        data = normalize_join_key(data, config.lookup_key)
         enricher = ReferenceEnricher(
             reference_path=config.reference_data_path,
             lookup_key=config.lookup_key,

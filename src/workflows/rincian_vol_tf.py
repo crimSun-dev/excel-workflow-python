@@ -17,7 +17,6 @@ RINCIAN_VOL_TF_DEFINITION = WorkflowDefinition(
     value_col="AMOUNT_IN_IDR",
     report_title="Rincian Vol TF Report",
     detail_sheet_name="Detail_Data",
-    number_format="#,##0",
     numeric_columns=("AMOUNT_IN_IDR",),
     required_columns=("SEGMEN", "MAINBR", "MBDESC", "AMOUNT_IN_IDR"),
     exclude_segmen=("Wholesale",),

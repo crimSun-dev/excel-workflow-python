@@ -167,6 +167,36 @@ def reference_file_kanca(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def reference_file_uker(tmp_path: Path) -> Path:
+    """Reference workbook whose join key is spelled `UKER` (no KODE_UKER column)."""
+    ref = pd.DataFrame(
+        {
+            "UKER": ["0001", "0002"],
+            "MAIN_CODE": ["MC10", "MC20"],
+            "MAIN_BRANCH": ["Jakarta Pusat", "Surabaya"],
+        }
+    )
+    path = tmp_path / "reference_uker.xlsx"
+    ref.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
+def reference_file_kode_uker_spaced(tmp_path: Path) -> Path:
+    """Reference workbook whose join key is the spaced `KODE UKER` variant."""
+    ref = pd.DataFrame(
+        {
+            "KODE UKER": ["0001", "0002"],
+            "MAIN_CODE": ["MC10", "MC20"],
+            "MAIN_BRANCH": ["Jakarta Pusat", "Surabaya"],
+        }
+    )
+    path = tmp_path / "reference_kode_uker_spaced.xlsx"
+    ref.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
 def reference_file_multisheet(tmp_path: Path) -> Path:
     """Multi-sheet workbook where the mapping table is not on the first sheet."""
     decoy = pd.DataFrame(
@@ -316,6 +346,68 @@ def timeseries_briva_file(tmp_path: Path) -> Path:
     )
     path = tmp_path / "timeseries_briva_sample.csv"
     path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def timeseries_briva_file_underscore_key(tmp_path: Path) -> Path:
+    """Briva sample using the canonical underscored `KODE_UKER` header.
+
+    Same NONWHOLESALE totals as `timeseries_briva_file`, so both header variants
+    are provably interchangeable.
+    """
+    content = (
+        "SEGMEN|KODE_UKER|VOLUME_IDR\n"
+        "NONWHOLESALE|0001|1481517421603.75\n"
+        "NONWHOLESALE|0002|1000000000000\n"
+        "WHOLESALE|0001|999999999999\n"
+    )
+    path = tmp_path / "timeseries_briva_underscore.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def timeseries_briva_file_with_unmapped(tmp_path: Path) -> Path:
+    """Briva sample where 0009 is absent from the reference (=> UNMAPPED row).
+
+    NONWHOLESALE VOLUME_IDR by branch (via reference_file 0001->MC10, 0002->MC20):
+        MC10 = 100, MC20 = 200, UNMAPPED (0009) = 50; Grand Total = 350.
+    """
+    content = (
+        "SEGMEN|KODE UKER|VOLUME_IDR\n"
+        "NONWHOLESALE|0001|100\n"
+        "NONWHOLESALE|0002|200\n"
+        "NONWHOLESALE|0009|50\n"
+    )
+    path = tmp_path / "timeseries_briva_unmapped.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def qlola_raw_file_numeric_ids(tmp_path: Path) -> Path:
+    """Qlola sample whose IDs are numeric (int-dtype on the master side).
+
+    U-prefixed IDs would mask the int-vs-str VLOOKUP mismatch this exercises.
+    """
+    content = (
+        "SOURCE|ID|FREKUENSI|KODE_UKER\n"
+        "QCASH|1001|6|K1\n"
+        "QCASH|1002|2|K1\n"
+        "QCASH|1003|7|K2\n"
+    )
+    path = tmp_path / "qlola_numeric_ids.csv"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def qlola_master_numeric_file(tmp_path: Path) -> Path:
+    """Master ID -> MAIN_CODE workbook storing IDs as integers (1003 omitted)."""
+    master = pd.DataFrame({"ID": [1001, 1002], "MAIN_CODE": ["7", "9"]})
+    path = tmp_path / "qlola_master_numeric.xlsx"
+    master.to_excel(path, index=False)
     return path
 
 

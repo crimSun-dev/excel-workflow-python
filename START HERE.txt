@@ -1,0 +1,58 @@
+Tongkat Gaib Excel
+========================
+
+No Python install needed - just double-click TongkatGaibExcel.exe
+
+How to run
+----------
+1. Double-click TongkatGaibExcel.exe
+2. Select a workflow from the dropdown
+3. Select your raw data file (.txt / .csv, pipe-delimited)
+4. If prompted: select your reference mapping file (.xlsx)
+5. If prompted (Qlola): select your master-data file (.xlsx)
+6. Choose where to save the output report (.xlsx)
+7. Optional: type a SEGMEN filter or leave blank
+8. Click "Run Pipeline"
+
+Workflows
+---------
+- Report Summary Akumulasi (needs reference mapping)
+- Rincian Vol TF
+- Rincian Portal BG
+- Time Series FBI Briva (needs reference mapping)
+- Time Series Active User Qlola (needs reference + master data)
+
+Qlola (Workflow 5) — three input files
+--------------------------------------
+1. Raw pipe-delimited .csv (SOURCE, ID, FREKUENSI, KODE_UKER, ...)
+2. UKER reference workbook (KODE_UKER -> MAIN_CODE for detail only)
+3. Master-data workbook (ID -> MAIN_CODE for the Summary pivot)
+
+For ``MASTER DATA STATIS MALANG`` workbooks, the Qlola user ID lives in the
+``ID_PRODUCT`` column (not ``CIF``). The Summary counts users by the master
+``MAIN CODE`` after VLOOKUP on ID — same as manual Excel step 4.
+
+Reference file column names
+---------------------------
+The program accepts common alternate headers (not only KODE_UKER):
+
+  Branch lookup:  KODE_UKER, KODE UNIT, KANCA, KODE SUB KANCA, KODE KANCA, UKER, KODE UKER
+  Branch code:    MAIN_CODE, MAIN CODE, KODE, KODE KANCA, KODE UNIT, UNIQUE CODE, KODE INDUK
+  Branch name:    MAIN_BRANCH, MAIN BRANCH, BRANCH, DESC KANCA, DESC UNIT, SUB KANCA, NAMA UKER, DESCRIPTION
+
+Multi-sheet Excel files are supported - it scans sheets until it finds a match.
+
+Output
+------
+Creates an Excel report with a Summary sheet (and detail/audit data as applicable).
+
+Troubleshooting
+---------------
+- Close the output Excel file before running again (can't overwrite an open file)
+- If you see "Pipeline failed", read the error - it lists which columns were found
+- Codes missing from the reference show as UNMAPPED (report still generates)
+
+Sample raw data format (your .txt / .csv file should look like this):
+
+  KODE_UKER|SEGMEN|VOLUME_IN_IDR
+  0001|Wholesale|1250000000000

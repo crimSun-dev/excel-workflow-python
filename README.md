@@ -1,6 +1,6 @@
 # Tongkat Gaib Excel
 
-**by crimSun** — Automated **Financial Data Processing & Excel Summarization Pipeline**.
+Automated **Financial Data Processing & Excel Summarization Pipeline**.
 
 This tool replaces a manual 4-step Microsoft Excel workflow (Text-to-Columns →
 VLOOKUP → PivotTable → formatting) with a fast, testable, headless Python ETL
@@ -48,6 +48,54 @@ view, corporate styling, Grand Total, explicit numeric format — no `E+12`
 scientific notation) plus a row-level detail sheet (**Enriched_Data** for
 Akumulasi, **Detail_Data** for the Rincian workflows).
 
+### SOURCE filter config keys
+
+Two optional `WorkflowDefinition` keys (`src/workflows/base.py`) drive the
+SOURCE exclusion feature. Both default to off, so workflows that predate them —
+Akumulasi, Rincian Vol TF, Rincian Portal BG, Time Series FBI Briva — are
+unaffected and their SOURCE field stays greyed out.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `source_exclude` | `tuple[str, ...]` | `()` | SOURCE values dropped before aggregation, matched case-insensitively after trimming. Empty means no filtering. |
+| `has_source_filter` | `bool` | `False` | Declares that this workflow exposes the SOURCE control. The GUI enables its SOURCE field only for these workflows; for all others the field is disabled and its value is ignored at runtime. |
+
+Only **Time Series Active User Qlola** sets them today
+(`source_exclude=("CMS",)`, `has_source_filter=True`). An operator can override
+the list at runtime through the GUI's SOURCE field, which maps to
+`ProcessingConfig.source_exclude`: `None` keeps the definition default, and a
+cleared field yields `[]`, meaning exclude nothing.
+
+### Reading the numbers (operator notes)
+
+Two places where a report legitimately disagrees with a hand-built Excel cut.
+Neither is a bug; both are listed here so a mismatch does not get re-litigated
+every month.
+
+**1. Qlola Summary counts mapped users only.**
+
+The Time Series Active User Qlola **Summary_Report** counts only IDs that
+resolved to a real `MAIN_CODE` in the master-data workbook. IDs the master does
+not know are left out of the rows *and* out of the Grand Total — matching a
+dashboard pivot that drops `#N/A`. Nothing is lost: those IDs still appear on
+the **Enriched_Data** detail sheet with `MAIN_CODE = UNMAPPED`, and the Summary
+metadata block carries an `Unmapped IDs:` line with the count. So a manual cut
+that includes `#N/A` will read higher than the Summary by exactly that count.
+
+If almost every ID fails to match, the GUI shows a **Master ID lookup failed**
+warning after the run with sample IDs from both sides. The report is still
+written — the warning means "check the master-data file you picked", not
+"the run failed".
+
+**2. Briva totals keep their cents.**
+
+The Time Series FBI Briva Grand Total is stored unrounded with the `#,##0.00`
+format — e.g. `2,481,517,421,603.75`. An operator who rounds the same figure in
+Excel sees `…604`, because `ROUND(2481517421603.75, 0)` rounds the `.75` up. The
+one-unit gap is the rounding, not a different sum. The software deliberately
+stores the exact value so no cents are silently dropped; round it downstream if
+your dashboard wants a whole number.
+
 ## Install
 
 ```bash
@@ -88,9 +136,11 @@ python main.py
 ```
 
 Launches a native Tkinter file-picker dialog — pick a **workflow** from the
-dropdown, select the raw file, (for Akumulasi) a reference workbook, an optional
-filter, and an output path, then click **Run Pipeline**. The reference-file row
-is shown only for the Akumulasi workflow.
+dropdown, select the raw file, (where required) a reference workbook, an optional
+filter, and an output path, then click **Run Pipeline**. The reference-file and
+master-data rows are shown only for the workflows that need them, and the
+**SOURCE filter** field is enabled only for workflows declaring
+`has_source_filter` (see [SOURCE filter config keys](#source-filter-config-keys)).
 
 ## Input format
 
@@ -162,9 +212,7 @@ python build_exe.py
 ```
 
 Produces `dist/TongkatGaibExcel.exe`, a single zero-dependency executable
-that runs on a clean Windows machine without Python installed. The crimSun logo
-is bundled into the exe (via PyInstaller `datas`), so no side-car assets folder
-is required.
+that runs on a clean Windows machine without Python installed.
 
 ## Project layout
 
@@ -183,9 +231,8 @@ is required.
 │   │   ├── rincian_portal_bg.py  # Rincian Portal BG (no filter)
 │   │   └── registry.py       # WORKFLOW_REGISTRY + get_strategy()
 │   ├── cli.py            # Typer CLI (--workflow)
-│   ├── branding.py       # Product name / byline / logo path (crimSun)
+│   ├── branding.py       # Product name
 │   └── gui.py            # Tkinter file-picker fallback (workflow dropdown)
-├── assets/              # crimSun logo (bundled into the exe)
 ├── tests/               # pytest suite
 ├── sample_data/         # Example raw + reference files
 ├── main.py              # Entry point (GUI when run with no args)

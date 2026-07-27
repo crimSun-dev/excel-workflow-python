@@ -6,10 +6,14 @@ so it overrides `execute` while still reusing `IngestionEngine`,
 mode, and the orchestrator exception boundary.
 
 Stages:
-    ingest -> exclude SOURCE=CMS -> UKER enrich (detail context) ->
-    sum FREKUENSI per ID -> master ID->MAIN_CODE lookup ->
-    categorize AKTIF/TIDAK at FREKUENSI >= 5 ->
+    ingest -> exclude configured SOURCE values (default CMS) ->
+    UKER enrich (detail context) -> sum FREKUENSI per ID ->
+    master ID->MAIN_CODE lookup -> categorize AKTIF/TIDAK at FREKUENSI >= 5 ->
     crosstab Count of distinct ID by MAIN_CODE x USER_AKTIF.
+
+The SOURCE exclusion list comes from the workflow definition (`source_exclude`)
+and can be overridden at runtime via `ProcessingConfig.source_exclude` (the GUI
+SOURCE field); an empty list disables SOURCE filtering entirely.
 
 The final crosstab is keyed on the *master* MAIN_CODE, never the UKER-enriched
 MAIN_CODE: sample Sheet1 evidence shows UKER MAIN_CODE matches global AKTIF/TIDAK
@@ -20,7 +24,15 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..enrichment import UNMAPPED_SENTINEL, MasterDataEnricher, ReferenceEnricher
+from ..enrichment import (
+    ID_ALIASES,
+    UNMAPPED_SENTINEL,
+    MasterDataEnricher,
+    ReferenceEnricher,
+    build_unmapped_diagnostic,
+    canonicalize_join_id,
+    warn_if_mostly_unmapped,
+)
 from ..exporter import ExcelReportExporter
 from ..ingestion import IngestionEngine
 from ..schemas import ProcessingConfig
@@ -30,6 +42,7 @@ from .base import (
     WorkflowRunResult,
     WorkflowStrategy,
     WorkflowValidationError,
+    normalize_join_key,
 )
 
 ACTIVE_LABEL = "AKTIF TRX >=5x"
@@ -46,10 +59,10 @@ TIMESERIES_ACTIVE_USER_QLOLA_DEFINITION = WorkflowDefinition(
     value_col="FREKUENSI",
     report_title="Time Series Active User Qlola Report",
     detail_sheet_name="Enriched_Data",
-    number_format="#,##0",
     numeric_columns=("FREKUENSI",),
     required_columns=("SOURCE", "ID", "FREKUENSI"),
-    exclude_source=("CMS",),
+    source_exclude=("CMS",),
+    has_source_filter=True,
 )
 
 
@@ -86,32 +99,62 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
         # 2. Validate mandatory input columns.
         self._validate_columns(data)
 
-        # 3. Exclude SOURCE=CMS (case-insensitive); QCASH/QIB rows are retained.
-        excluded = {s.strip().casefold() for s in definition.exclude_source}
-        source = data["SOURCE"].astype(str).str.strip().str.casefold()
-        data = data[~source.isin(excluded)]
+        # 3. Exclude the configured SOURCE values (default CMS, case-insensitive);
+        # a GUI/CLI override replaces the default, and an empty list disables it.
+        source_exclude = self.resolve_source_exclude(config)
+        data = self.apply_source_exclude(data, source_exclude)
 
-        # 4. UKER enrich for detail context (not the crosstab key).
+        # 4. UKER enrich for detail context (not the crosstab key). The branch
+        # code is canonicalized here, at ingest, before the generic enricher runs.
+        data = normalize_join_key(data, config.lookup_key)
         enricher = ReferenceEnricher(
             reference_path=config.reference_data_path,
             lookup_key=config.lookup_key,
         )
         enriched = enricher.enrich(data).data
+        # UKER MAIN_CODE is for detail / branch context only — the Summary crosstab
+        # keys on a separate master ID→MAIN_CODE VLOOKUP below.
+        enriched = enriched.rename(
+            columns={
+                "MAIN_CODE": "UKER_MAIN_CODE",
+                "MAIN_BRANCH": "UKER_MAIN_BRANCH",
+            }
+        )
 
-        # 5. Sum FREKUENSI per unique ID.
+        # 5. Sum FREKUENSI per unique ID. IDs are normalized *before* the groupby
+        # so ' U1' and 'U1' collapse into one user rather than two.
+        enriched["ID"] = enriched["ID"].apply(canonicalize_join_id)
         per_id = (
-            enriched.groupby("ID", as_index=False, dropna=False)["FREKUENSI"]
-            .sum()
+            enriched.groupby("ID", as_index=False)
+            .agg(
+                FREKUENSI=("FREKUENSI", "sum"),
+                UKER_MAIN_CODE=("UKER_MAIN_CODE", "first"),
+            )
             .reset_index(drop=True)
         )
-        per_id["ID"] = per_id["ID"].astype(str).str.strip()
 
-        # 6. Master ID -> MAIN_CODE lookup; unmatched IDs kept as UNMAPPED.
-        id_to_code = MasterDataEnricher(config.master_data_path).build_id_to_main_code()
+        # 6. Master ID -> MAIN_CODE lookup (VLOOKUP on ID); unmatched -> UNMAPPED.
+        # Probe with the aggregated raw IDs so the enricher picks the column whose
+        # keys actually match the Qlola user IDs, not a decoy ID/CIF column.
+        id_to_code = MasterDataEnricher(config.master_data_path).build_id_to_main_code(
+            probe_ids=per_id["ID"].tolist()
+        )
         per_id["MAIN_CODE"] = (
             per_id["ID"].map(id_to_code).fillna(UNMAPPED_SENTINEL)
         )
         unmapped_count = int((per_id["MAIN_CODE"] == UNMAPPED_SENTINEL).sum())
+        diagnostic_args = {
+            "unmapped_count": unmapped_count,
+            "total": len(per_id),
+            "raw_key_sample": per_id["ID"].head(5).tolist(),
+            "reference_key_sample": list(id_to_code)[:5],
+            "aliases_attempted": list(ID_ALIASES),
+            "context": "Qlola master ID -> MAIN_CODE lookup",
+        }
+        warned = warn_if_mostly_unmapped(**diagnostic_args)
+        # A near-total UNMAPPED join is a join *failure*, not a normal miss rate,
+        # so the text is handed back for the GUI to show. The run still exports.
+        diagnostic = build_unmapped_diagnostic(**diagnostic_args) if warned else None
 
         # 7. Categorize active vs inactive at the >= 5 threshold.
         per_id["USER_AKTIF"] = per_id["FREKUENSI"].apply(
@@ -119,6 +162,7 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
         )
 
         # 8. Crosstab: Count of distinct ID by MAIN_CODE (rows) x USER_AKTIF (cols).
+        # Summary excludes UNMAPPED / blank / #N/A rows; detail keeps all IDs.
         crosstab = self._build_crosstab(per_id)
 
         exporter = ExcelReportExporter(
@@ -129,28 +173,46 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
         )
         output_path = exporter.export_crosstab(
             crosstab_df=crosstab,
-            detail_df=per_id[["ID", "FREKUENSI", "MAIN_CODE", "USER_AKTIF"]],
+            detail_df=per_id[
+                ["ID", "UKER_MAIN_CODE", "MAIN_CODE", "FREKUENSI", "USER_AKTIF"]
+            ],
             output_path=config.output_report_path,
             row_label_header="MAIN_CODE",
             category_columns=USER_AKTIF_CATEGORIES,
             total_records=ingested.total_rows,
-            filter_applied=f"{', '.join(definition.exclude_source)} (SOURCE excluded)",
+            filter_applied=(
+                f"{', '.join(source_exclude)} (SOURCE excluded)"
+                if source_exclude
+                else None
+            ),
+            unmapped_ids_count=unmapped_count,
         )
 
         return WorkflowRunResult(
             output_path=output_path,
             total_records_processed=ingested.total_rows,
             unmapped_records_count=unmapped_count,
+            unmapped_warning_emitted=warned,
+            unmapped_diagnostic=diagnostic,
         )
 
     @staticmethod
     def _build_crosstab(per_id: pd.DataFrame) -> pd.DataFrame:
         """Counts distinct IDs per MAIN_CODE x USER_AKTIF as a tidy frame.
 
-        Every category column is present even when empty, and MAIN_CODE rows
-        (including the UNMAPPED row) are retained and sorted for stable output.
+        Rows whose MAIN_CODE is UNMAPPED, blank, or '#N/A' are excluded from
+        the Summary_Report so that Grand Totals reflect mapped-only counts.
+        The detail sheet separately retains all IDs including unmapped.
         """
-        counts = pd.crosstab(per_id["MAIN_CODE"], per_id["USER_AKTIF"])
+        # Exclude UNMAPPED / blank / #N/A from Summary rows.
+        _EXCLUDED = {UNMAPPED_SENTINEL, "", "#N/A"}
+        mapped = per_id[~per_id["MAIN_CODE"].isin(_EXCLUDED)]
+
+        if mapped.empty:
+            # All IDs unmapped: return an empty frame with the right columns.
+            return pd.DataFrame(columns=["MAIN_CODE", *USER_AKTIF_CATEGORIES])
+
+        counts = pd.crosstab(mapped["MAIN_CODE"], mapped["USER_AKTIF"])
         for category in USER_AKTIF_CATEGORIES:
             if category not in counts.columns:
                 counts[category] = 0
@@ -158,3 +220,4 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
         counts = counts.sort_index().reset_index()
         counts.columns = ["MAIN_CODE", *USER_AKTIF_CATEGORIES]
         return counts
+

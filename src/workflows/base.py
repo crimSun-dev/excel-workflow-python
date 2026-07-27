@@ -12,16 +12,38 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
 from ..aggregation import AggregationEngine
-from ..exporter import ExcelReportExporter
+from ..enrichment import LOOKUP_KEY_ALIASES, resolve_alias_column
+from ..exporter import PLAIN_INTEGER_FORMAT, ExcelReportExporter
 from ..ingestion import IngestionEngine
 
 if TYPE_CHECKING:
     from ..schemas import ProcessingConfig
+
+
+def normalize_join_key(data: pd.DataFrame, lookup_key: str) -> pd.DataFrame:
+    """Canonicalizes the raw branch-code column ahead of reference enrichment.
+
+    Real exports spell the branch code as `KODE UKER`, `KODE_UKER` or `UKER`,
+    and pandas may hand back integer-typed codes (1 vs "0001") or values with
+    stray padding. Each workflow owns its own column quirks, so this runs at the
+    workflow ingest step rather than inside the generic enrichment module:
+    the first matching alias is renamed to `lookup_key` and its values are cast
+    to string and trimmed. Returns the frame untouched when no alias matches -
+    the enricher then raises with its full columns-and-aliases diagnostic.
+    """
+    lookup_key = lookup_key.upper()
+    aliases = [lookup_key, *(a for a in LOOKUP_KEY_ALIASES if a != lookup_key)]
+    match = resolve_alias_column(data, aliases)
+    if match is None:
+        return data
+    data = data.rename(columns={match: lookup_key}) if match != lookup_key else data.copy()
+    data[lookup_key] = data[lookup_key].astype(str).str.strip()
+    return data
 
 
 class WorkflowId(str, Enum):
@@ -49,7 +71,8 @@ class WorkflowDefinition:
     value_col: str
     report_title: str
     detail_sheet_name: str
-    number_format: str = "#,##0.00"
+    number_format: str = PLAIN_INTEGER_FORMAT
+    numeric_rounding: Literal["round", "ceil"] = "round"
     numeric_columns: tuple[str, ...] = ()
     required_columns: tuple[str, ...] = ()
     exclude_segmen: tuple[str, ...] = ()
@@ -59,8 +82,14 @@ class WorkflowDefinition:
     # `exclude_segmen` exclusion list so inclusion vs exclusion never share a flag.
     segmen_include: str | None = None
     # Dedicated SOURCE exclusion list (e.g. Qlola drops CMS). Kept separate from
-    # SEGMEN filtering so the two column filters never collide.
-    exclude_source: tuple[str, ...] = ()
+    # SEGMEN filtering so the two column filters never collide. Empty (the
+    # default) means no SOURCE filtering at all; a runtime `ProcessingConfig.
+    # source_exclude` overrides this default when supplied.
+    source_exclude: tuple[str, ...] = ()
+    # Whether this workflow exposes the SOURCE filter control (GUI enables its
+    # SOURCE field only for workflows declaring True; all others grey it out and
+    # ignore any value it holds).
+    has_source_filter: bool = False
     # Whether this workflow needs a second (master-data) reference file.
     requires_master_data: bool = False
     # Ordered value columns to aggregate. Empty => single-column workflow that
@@ -87,6 +116,11 @@ class WorkflowRunResult:
     output_path: Path
     total_records_processed: int
     unmapped_records_count: int = 0
+    unmapped_warning_emitted: bool = False
+    # Operator-facing join-failure text, set only when the near-total UNMAPPED
+    # threshold trips. The orchestrator forwards it so the GUI can show it
+    # instead of leaving the failure buried in the log.
+    unmapped_diagnostic: str | None = None
 
 
 class WorkflowStrategy(ABC):
@@ -140,6 +174,7 @@ class WorkflowStrategy(ABC):
         # 5. Export the parameterized styled workbook.
         exporter = ExcelReportExporter(
             number_format=definition.number_format,
+            numeric_rounding=definition.numeric_rounding,
             value_column=definition.value_col,
             value_columns=definition.resolved_value_cols,
             display_names=definition.display_name_map,
@@ -167,6 +202,33 @@ class WorkflowStrategy(ABC):
     ) -> tuple[pd.DataFrame, int]:
         """Default: no enrichment. Returns the data untouched, 0 unmapped."""
         return data, 0
+
+    def resolve_source_exclude(self, config: "ProcessingConfig") -> list[str]:
+        """Effective SOURCE exclusion list: runtime override beats the definition.
+
+        Workflows that do not declare `has_source_filter` always return `[]`, so
+        a stale value left in the GUI/CLI can never leak into them.
+        """
+        definition = self.definition
+        if not definition.has_source_filter:
+            return []
+        if config.source_exclude is not None:
+            return [s.strip() for s in config.source_exclude if s.strip()]
+        return list(definition.source_exclude)
+
+    @staticmethod
+    def apply_source_exclude(
+        data: pd.DataFrame, source_exclude: list[str]
+    ) -> pd.DataFrame:
+        """Drops rows whose SOURCE matches an excluded value (case-insensitive).
+
+        An empty list is a no-op, so pre-existing workflows are untouched.
+        """
+        if not source_exclude or "SOURCE" not in data.columns:
+            return data
+        excluded = {s.strip().casefold() for s in source_exclude}
+        source = data["SOURCE"].astype(str).str.strip().str.casefold()
+        return data[~source.isin(excluded)]
 
     def _filter_label(self, config: "ProcessingConfig") -> str | None:
         """Human-readable filter description for the report metadata block."""

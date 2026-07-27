@@ -37,6 +37,7 @@ class PipelineOrchestrator:
                 total_records_processed=result.total_records_processed,
                 unmapped_records_count=result.unmapped_records_count,
                 error_message=None,
+                unmapped_diagnostic=result.unmapped_diagnostic,
             )
         except Exception as exc:  # noqa: BLE001 - boundary: surface, never crash
             elapsed = time.perf_counter() - start

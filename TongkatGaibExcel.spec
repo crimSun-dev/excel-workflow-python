@@ -1,8 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-# Bundle the crimSun logo so the GUI/icon resolve it from the one-file bundle.
-datas = [('assets/crimsun_logo.png', 'assets')]
+datas = []
 binaries = []
 hiddenimports = ['tkinter']
 tmp_ret = collect_all('pydantic')

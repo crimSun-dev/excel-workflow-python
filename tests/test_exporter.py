@@ -58,7 +58,7 @@ def test_exporter_applies_explicit_number_format(summary_df, enriched_df, tmp_pa
     for row in ws.iter_rows():
         for cell in row:
             if isinstance(cell.value, (int, float)) and cell.value == 1_500_000_000_000.0:
-                assert cell.number_format == "#,##0.00"
+                assert cell.number_format == "0"
                 found = True
     assert found, "Volume value cell not found in summary sheet"
 
@@ -80,8 +80,8 @@ def test_exporter_adds_grand_total_row(summary_df, enriched_df, tmp_path):
     ws = load_workbook(out)["Summary_Report"]
     labels = [c.value for row in ws.iter_rows() for c in row if c.value == "Grand Total"]
     assert "Grand Total" in labels
-    # Grand Total value should equal the sum of the volume column.
-    total = summary_df["VOLUME_IN_IDR"].sum()
+    # Grand Total value should equal the sum of the volume column (plain ints).
+    total = int(round(summary_df["VOLUME_IN_IDR"].sum()))
     values = [
         c.value for row in ws.iter_rows() for c in row if c.value == total
     ]
