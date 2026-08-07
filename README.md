@@ -40,8 +40,8 @@ aggregate → export skeleton, dispatched through `WORKFLOW_REGISTRY`.
 | Workflow (`--workflow`) | Reference file | Grouped by | Sums | SEGMEN rule | Number format |
 |---|---|---|---|---|---|
 | Report Summary Akumulasi (`akumulasi`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | `VOLUME_IN_IDR` | Optional include filter | `#,##0.00` |
-| Rincian Vol TF (`rincian-vol-tf`) | Not used | `MAINBR`, `MBDESC` | `AMOUNT_IN_IDR` | Excludes `Wholesale` (blank kept) | `#,##0` |
-| Rincian Portal BG (`rincian-portal-bg`) | Not used | `MAINBR`, `MBNAME` | `AMOUNT_IN_IDR` | None | `#,##0` |
+| Rincian Vol TF (`rincian-vol-tf`) | Not used | `MAINBR`, `MBDESC` | `AMOUNT_IN_IDR` | Excludes `Wholesale` (blank kept) | `0` |
+| Rincian Portal BG (`rincian-portal-bg`) | Not used | `MAINBR`, `MBNAME` | `AMOUNT_IN_IDR` | None | `0` |
 
 Every workflow produces a two-sheet workbook: a **Summary_Report** (tabular
 view, corporate styling, Grand Total, explicit numeric format — no `E+12`

@@ -16,7 +16,6 @@ RINCIAN_PORTAL_BG_DEFINITION = WorkflowDefinition(
     value_col="AMOUNT_IN_IDR",
     report_title="Rincian Portal BG Report",
     detail_sheet_name="Detail_Data",
-    number_format="#,##0",
     numeric_columns=("AMOUNT_IN_IDR",),
     required_columns=("MAINBR", "MBNAME", "AMOUNT_IN_IDR"),
     supports_segment_filter=False,

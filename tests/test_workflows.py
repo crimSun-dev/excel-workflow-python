@@ -173,6 +173,15 @@ def test_rincian_portal_bg_aggregates_without_filter(rincian_portal_bg_file, tmp
     assert rows[("B01", "Branch One")] == 3000
     assert rows[("B02", "Branch Two")] == 500
 
+    # Plain integer display — no thousands-separator commas (format "0").
+    amount_cells = [
+        row[2]
+        for row in ws.iter_rows()
+        if row[0].value in {"B01", "B02"}
+    ]
+    assert all(isinstance(c.value, int) for c in amount_cells)
+    assert all(c.number_format == "0" for c in amount_cells)
+
 
 # --------------------------------------------------------------------------- #
 # Validation & E2E structure
