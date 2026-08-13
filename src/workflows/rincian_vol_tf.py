@@ -3,6 +3,9 @@
 No reference enrichment. Excludes rows whose SEGMEN is "Wholesale"
 (case-insensitive; blank/null SEGMEN rows are kept), then groups by
 MAINBR + MBDESC summing AMOUNT_IN_IDR into a tabular integer-formatted report.
+
+The Wholesale exclusion is the default, not a hardcoded rule: the operator can
+edit or clear it per run from the GUI/CLI SEGMEN fields.
 """
 
 from __future__ import annotations
@@ -20,7 +23,8 @@ RINCIAN_VOL_TF_DEFINITION = WorkflowDefinition(
     numeric_columns=("AMOUNT_IN_IDR",),
     required_columns=("SEGMEN", "MAINBR", "MBDESC", "AMOUNT_IN_IDR"),
     exclude_segmen=("Wholesale",),
-    supports_segment_filter=False,
+    supports_segment_filter=True,
+    has_source_filter=True,
 )
 
 

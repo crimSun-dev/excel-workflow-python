@@ -469,6 +469,152 @@ def qlola_master_file(tmp_path: Path) -> Path:
     return path
 
 
+DATA_STATIS_CONTENT = (
+    "KODE_UNIT|SEGMEN|KAWIL|ID_PRODUCT\n"
+    # 0001 -> MC10: P1 twice (duplicates count separately) + P2, plus a blank
+    # ID that must not count => Count of ID_PRODUCT = 3.
+    "0001|Consumer|KANWIL MALANG|P1\n"
+    "0001|Micro|kanwil malang|P1\n"
+    "0001||KANWIL MALANG|P2\n"       # blank SEGMEN is kept
+    "0001|SME|KANWIL MALANG|   \n"   # blank ID_PRODUCT does not count
+    # 0002 -> MC20: one countable row => Count = 1.
+    "0002|SME|KANWIL MALANG|P3\n"
+    # Dropped by the definition-baked filters.
+    "0001|KORPORASI|KANWIL MALANG|P4\n"    # KORPORASI excluded
+    "0001|korporasi|KANWIL MALANG|P5\n"    # case-insensitive exclusion
+    "0002|Consumer|KANWIL SURABAYA|P6\n"   # wrong KAWIL
+    "0002|Consumer||P7\n"                  # blank KAWIL never matches
+    # 0009 is absent from the reference => UNMAPPED, still counted (1).
+    "0009|Consumer|KANWIL MALANG|P8\n"
+)
+
+
+@pytest.fixture
+def report_data_statis_bin_file(tmp_path: Path) -> Path:
+    """Pipe-delimited Report Data Statis sample saved with a `.bin` extension.
+
+    Uses the underscored `KODE_UNIT` header (exercises the alias registry).
+    Expected Count of ID_PRODUCT after both filters, via `reference_file`
+    (0001->MC10, 0002->MC20, 0009 absent):
+        MC10 = 3, MC20 = 1, UNMAPPED = 1; Grand Total = 5.
+    """
+    path = tmp_path / "data_statis_sample.bin"
+    path.write_text(DATA_STATIS_CONTENT, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def report_data_statis_txt_file(tmp_path: Path) -> Path:
+    """Byte-identical twin of `report_data_statis_bin_file` saved as `.txt`."""
+    path = tmp_path / "data_statis_sample.txt"
+    path.write_text(DATA_STATIS_CONTENT, encoding="utf-8")
+    return path
+
+
+# --------------------------------------------------------------------------- #
+# Report Giro fixtures.
+#
+# The master is built with openpyxl (not pandas) so blank SALDO UPDATE cells stay
+# genuinely empty and the second sheet exists to prove it survives the update.
+# --------------------------------------------------------------------------- #
+GIRO_ACCOUNT_MATCHED = "1234567890"      # monthly key is the float 1234567890.0
+GIRO_ACCOUNT_PLAIN = "2222222222"
+GIRO_ACCOUNT_DEPOSITO = "3333333333"     # present in monthly, must stay blank
+GIRO_ACCOUNT_MISSING = "4444444444"      # absent from monthly, must stay blank
+GIRO_ACCOUNT_DUPLICATED = "5555555555"   # duplicated in monthly; first hit wins
+
+
+@pytest.fixture
+def giro_master_file(tmp_path: Path) -> Path:
+    """Two-sheet Giro master: NO REK, JENIS, SALDO (historical), SALDO UPDATE.
+
+    Every SALDO UPDATE cell starts blank. The `Catatan` sheet carries unrelated
+    content that the workflow must leave completely alone.
+    """
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "DAFTAR GIRO"
+    sheet.append(["NO REK", "JENIS", "SALDO", "SALDO UPDATE"])
+    sheet.append([GIRO_ACCOUNT_MATCHED, "Giro", 1000, None])
+    sheet.append([GIRO_ACCOUNT_PLAIN, "Giro", 500, None])
+    sheet.append([GIRO_ACCOUNT_DEPOSITO, "Deposito", 300, None])
+    sheet.append([GIRO_ACCOUNT_MISSING, "Giro", 900, None])
+    sheet.append([GIRO_ACCOUNT_DUPLICATED, "giro", 100, None])
+
+    notes = workbook.create_sheet("Catatan")
+    notes["A1"] = "Catatan operator"
+    notes["A2"] = "Jangan dihapus"
+
+    path = tmp_path / "DAFTAR REKENING GIRO TSPM UPDATE JUNI.xlsx"
+    workbook.save(path)
+    return path
+
+
+@pytest.fixture
+def giro_monthly_file(tmp_path: Path) -> Path:
+    """Monthly giro source keyed by NO REK with a SALDO IDR balance column.
+
+    Covers the float-key variant (`1234567890.0`), a duplicate account (first
+    hit wins), a Deposito account that must be ignored, and a monthly-only
+    account with no master row.
+    """
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet.append(["NO REK", "SALDO IDR"])
+    sheet.append([1234567890.0, 2500])           # float key vs string master key
+    sheet.append([GIRO_ACCOUNT_PLAIN, 7500])
+    sheet.append([GIRO_ACCOUNT_DEPOSITO, 999])   # Deposito: must not be written
+    sheet.append([GIRO_ACCOUNT_DUPLICATED, 1250000000000])  # first hit
+    sheet.append([GIRO_ACCOUNT_DUPLICATED, 1])              # ignored duplicate
+    sheet.append(["9999999999", 42])             # monthly-only account
+
+    path = tmp_path / "giro_20260630_monthly.xlsx"
+    workbook.save(path)
+    return path
+
+
+@pytest.fixture
+def giro_monthly_file_with_segmen(tmp_path: Path) -> Path:
+    """Monthly giro source that also carries SEGMEN and SOURCE columns.
+
+    Real extracts usually stop at NO REK + SALDO IDR, but when the operator's
+    file does have these columns the SEGMEN/SOURCE fields must actually filter
+    it, so a dropped account never reaches the master lookup.
+    """
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet.append(["NO REK", "SEGMEN", "SOURCE", "SALDO IDR"])
+    sheet.append([GIRO_ACCOUNT_MATCHED, "KORPORASI", "BRANCH", 2500])
+    sheet.append([GIRO_ACCOUNT_PLAIN, "RITEL", "BRANCH", 7500])
+    sheet.append([GIRO_ACCOUNT_DUPLICATED, "RITEL", "CMS", 1250000000000])
+
+    path = tmp_path / "giro_20260630_monthly_segmen.xlsx"
+    workbook.save(path)
+    return path
+
+
+@pytest.fixture
+def giro_monthly_file_unresolvable(tmp_path: Path) -> Path:
+    """Monthly workbook whose headers match no account/saldo alias."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["KODE PRODUK", "KETERANGAN"])
+    sheet.append(["A", "B"])
+    path = tmp_path / "giro_monthly_unresolvable.xlsx"
+    workbook.save(path)
+    return path
+
+
 @pytest.fixture
 def rincian_portal_bg_file(tmp_path: Path) -> Path:
     """Pipe-delimited sample for the Rincian Portal BG workflow (no filtering).

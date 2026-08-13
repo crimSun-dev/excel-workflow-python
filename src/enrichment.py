@@ -47,6 +47,9 @@ UNMAPPED_WARNING_THRESHOLD = 0.99
 # that use it as the code.
 LOOKUP_KEY_ALIASES = [
     "KODE_UKER",
+    # Underscored twin of `KODE UNIT`, used by Data Statis raw exports. Ranked
+    # adjacent to it so both spellings of the same logical column behave alike.
+    "KODE_UNIT",
     "KODE UNIT",
     "KANCA",
     "KODE SUB KANCA",
@@ -417,6 +420,7 @@ class ReferenceEnricher:
             score -= 10
         lookup_source = resolved.get(self.lookup_key, "")
         lookup_rank = {
+            "KODE_UNIT": 40,
             "KODE UNIT": 40,
             "KODE SUB KANCA": 30,
             "KANCA": 20,

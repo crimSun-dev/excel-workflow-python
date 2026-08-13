@@ -18,15 +18,27 @@ from src.enrichment import (
     warn_if_mostly_unmapped,
 )
 from src.gui import (
+    default_segmen_exclude_text,
+    default_segmen_include_text,
     default_source_text,
-    parse_source_exclude,
+    master_picker_config,
+    parse_exclude_list,
+    raw_picker_config,
+    segment_filter_enabled,
     source_filter_enabled,
     unmapped_warning_text,
+    workflow_choices,
 )
 from src.ingestion import IngestionEngine
 from src.orchestrator import PipelineOrchestrator
 from src.schemas import ProcessingConfig
-from src.workflows.base import WorkflowId, WorkflowValidationError, normalize_join_key
+from src.workflows.base import (
+    WorkflowDefinition,
+    WorkflowId,
+    WorkflowStrategy,
+    WorkflowValidationError,
+    normalize_join_key,
+)
 from src.workflows.registry import WORKFLOW_REGISTRY, get_definition, get_strategy
 
 
@@ -67,14 +79,94 @@ def test_canonicalize_fixes_float_master_id_mismatch(tmp_path):
 # --------------------------------------------------------------------------- #
 # Registry / dispatch
 # --------------------------------------------------------------------------- #
-def test_registry_has_all_five_workflows():
+def test_registry_has_all_seven_workflows():
     assert set(WORKFLOW_REGISTRY) == {
         WorkflowId.AKUMULASI,
         WorkflowId.RINCIAN_VOL_TF,
         WorkflowId.RINCIAN_PORTAL_BG,
         WorkflowId.TIMESERIES_FBI_BRIVA,
         WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA,
+        WorkflowId.REPORT_DATA_STATIS,
+        WorkflowId.REPORT_GIRO,
     }
+
+
+def test_registry_covers_every_declared_workflow_id():
+    """Every WorkflowId must dispatch, so a new enum member can't be forgotten."""
+    assert set(WORKFLOW_REGISTRY) == set(WorkflowId)
+
+
+# --------------------------------------------------------------------------- #
+# Selector order
+#
+# `WorkflowId` declaration order is the display contract: enums iterate in
+# declaration order, so the GUI dropdown, the CLI's valid-options listing, and
+# these assertions all read from the same source. The set-based tests above
+# would happily pass through a reorder, hence these ordered ones.
+# --------------------------------------------------------------------------- #
+OPERATOR_SEQUENCE = [
+    WorkflowId.AKUMULASI,
+    WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA,
+    WorkflowId.REPORT_DATA_STATIS,
+    WorkflowId.RINCIAN_VOL_TF,
+    WorkflowId.RINCIAN_PORTAL_BG,
+    WorkflowId.TIMESERIES_FBI_BRIVA,
+    WorkflowId.REPORT_GIRO,
+]
+
+OPERATOR_SEQUENCE_LABELS = [
+    "Report Summary Akumulasi",
+    "Time Series Active User Qlola",
+    "Report Data Statis",
+    "Rincian Vol TF",
+    "Rincian Portal BG",
+    "Time Series FBI Briva",
+    "Report Giro",
+]
+
+
+def test_workflow_id_declaration_order_matches_operator_sequence():
+    assert list(WorkflowId) == OPERATOR_SEQUENCE
+
+
+def test_gui_dropdown_labels_match_operator_sequence():
+    labels = list(workflow_choices())
+    assert labels == OPERATOR_SEQUENCE_LABELS
+    # The default selection is the first entry; no eighth item may appear.
+    assert labels[0] == "Report Summary Akumulasi"
+    assert len(labels) == 7
+
+
+def test_gui_dropdown_labels_map_to_unchanged_ids():
+    """Reordering must not rename any id the operator's scripts already use."""
+    assert workflow_choices() == {
+        "Report Summary Akumulasi": "akumulasi",
+        "Time Series Active User Qlola": "timeseries-active-user-qlola",
+        "Report Data Statis": "report-data-statis",
+        "Rincian Vol TF": "rincian-vol-tf",
+        "Rincian Portal BG": "rincian-portal-bg",
+        "Time Series FBI Briva": "timeseries-fbi-briva",
+        "Report Giro": "report-giro",
+    }
+
+
+def test_registry_insertion_order_mirrors_the_enum():
+    assert list(WORKFLOW_REGISTRY) == OPERATOR_SEQUENCE
+
+
+def test_cli_valid_options_listing_follows_the_enum_order():
+    """The unknown-id error builds its list from WorkflowId, so it stays in sync."""
+    from typer.testing import CliRunner
+
+    from src.cli import app
+
+    result = CliRunner().invoke(
+        app, ["process", "--raw", "nope.txt", "--workflow", "does-not-exist"]
+    )
+    assert result.exit_code == 1
+    listed = result.output.split("Valid options:")[1]
+    positions = [listed.index(w.value) for w in OPERATOR_SEQUENCE]
+    assert positions == sorted(positions)
 
 
 def test_get_strategy_accepts_string_id():
@@ -114,6 +206,130 @@ def test_aggregation_excludes_wholesale_case_insensitive():
     # (300); B03 is dropped entirely (only Wholesale).
     assert result.branch_count == 2
     assert result.total_volume_idr == 2300.0
+
+
+# --------------------------------------------------------------------------- #
+# Count aggregation + KAWIL inclusion (unit)
+# --------------------------------------------------------------------------- #
+def _count_frame() -> pd.DataFrame:
+    """MC10 has P1, P1, P2 and a blank ID; MC20 has one ID."""
+    return pd.DataFrame(
+        {
+            "MAIN_CODE": ["MC10", "MC10", "MC10", "MC10", "MC20"],
+            "MAIN_BRANCH": ["One", "One", "One", "One", "Two"],
+            "ID_PRODUCT": ["P1", "P1", "P2", "   ", "P9"],
+        }
+    )
+
+
+def test_count_aggregation_counts_duplicates_and_skips_blanks():
+    result = AggregationEngine().aggregate(
+        _count_frame(), value_col="ID_PRODUCT", aggfunc="count"
+    )
+    summary = result.summary_data.set_index("MAIN_CODE")["ID_PRODUCT"]
+    # Duplicated P1 counts twice; the whitespace-only cell does not count.
+    assert summary["MC10"] == 3
+    assert summary["MC20"] == 1
+    assert result.total_volume_idr == 4.0
+    assert result.branch_count == 2
+
+
+def test_count_aggregation_yields_integers_not_floats():
+    result = AggregationEngine().aggregate(
+        _count_frame(), value_col="ID_PRODUCT", aggfunc="count"
+    )
+    assert pd.api.types.is_integer_dtype(result.summary_data["ID_PRODUCT"])
+
+
+def test_count_aggregation_ignores_null_ids():
+    df = pd.DataFrame(
+        {
+            "MAIN_CODE": ["MC10", "MC10"],
+            "MAIN_BRANCH": ["One", "One"],
+            "ID_PRODUCT": ["P1", None],
+        }
+    )
+    result = AggregationEngine().aggregate(
+        df, value_col="ID_PRODUCT", aggfunc="count"
+    )
+    assert result.total_volume_idr == 1.0
+
+
+def test_count_aggregation_drops_korporasi_and_keeps_blank_segmen():
+    df = pd.DataFrame(
+        {
+            "SEGMEN": ["KORPORASI", "korporasi", "Consumer", "Micro", "SME", ""],
+            "MAIN_CODE": ["MC10"] * 6,
+            "MAIN_BRANCH": ["One"] * 6,
+            "ID_PRODUCT": ["P1", "P2", "P3", "P4", "P5", "P6"],
+        }
+    )
+    result = AggregationEngine(exclude_segmen=["KORPORASI"]).aggregate(
+        df, value_col="ID_PRODUCT", aggfunc="count"
+    )
+    # Both KORPORASI casings drop; Consumer/Micro/SME/blank all count.
+    assert result.total_volume_idr == 4.0
+
+
+def test_kawil_include_keeps_only_matching_region_any_case():
+    df = pd.DataFrame(
+        {
+            "KAWIL": ["KANWIL MALANG", " kanwil malang ", "KANWIL SURABAYA", ""],
+            "MAIN_CODE": ["MC10"] * 4,
+            "MAIN_BRANCH": ["One"] * 4,
+            "ID_PRODUCT": ["P1", "P2", "P3", "P4"],
+        }
+    )
+    result = AggregationEngine(kawil_include="KANWIL MALANG").aggregate(
+        df, value_col="ID_PRODUCT", aggfunc="count"
+    )
+    # Surabaya and the blank KAWIL row are both excluded.
+    assert result.total_volume_idr == 2.0
+
+
+def test_kawil_include_and_exclude_segmen_combine_with_and():
+    df = pd.DataFrame(
+        {
+            "SEGMEN": ["KORPORASI", "Consumer", "Consumer"],
+            "KAWIL": ["KANWIL MALANG", "KANWIL MALANG", "KANWIL SURABAYA"],
+            "MAIN_CODE": ["MC10"] * 3,
+            "MAIN_BRANCH": ["One"] * 3,
+            "ID_PRODUCT": ["P1", "P2", "P3"],
+        }
+    )
+    result = AggregationEngine(
+        exclude_segmen=["KORPORASI"], kawil_include="KANWIL MALANG"
+    ).aggregate(df, value_col="ID_PRODUCT", aggfunc="count")
+    # Only the Consumer + Malang row survives both filters.
+    assert result.total_volume_idr == 1.0
+
+
+def test_kawil_include_filtering_everything_out_returns_empty_summary():
+    df = pd.DataFrame(
+        {
+            "KAWIL": ["KANWIL SURABAYA"],
+            "MAIN_CODE": ["MC10"],
+            "MAIN_BRANCH": ["One"],
+            "ID_PRODUCT": ["P1"],
+        }
+    )
+    result = AggregationEngine(kawil_include="KANWIL MALANG").aggregate(
+        df, value_col="ID_PRODUCT", aggfunc="count"
+    )
+    assert result.branch_count == 0
+    assert result.total_volume_idr == 0.0
+
+
+def test_sum_remains_the_default_aggfunc():
+    df = pd.DataFrame(
+        {
+            "MAIN_CODE": ["MC10", "MC10"],
+            "MAIN_BRANCH": ["One", "One"],
+            "VOLUME_IN_IDR": [1000.0, 2000.0],
+        }
+    )
+    result = AggregationEngine().aggregate(df)
+    assert result.total_volume_idr == 3000.0
 
 
 # --------------------------------------------------------------------------- #
@@ -181,6 +397,484 @@ def test_rincian_portal_bg_aggregates_without_filter(rincian_portal_bg_file, tmp
     ]
     assert all(isinstance(c.value, int) for c in amount_cells)
     assert all(c.number_format == "0" for c in amount_cells)
+
+
+# --------------------------------------------------------------------------- #
+# Report Data Statis workflow (E2E)
+# --------------------------------------------------------------------------- #
+def _statis_summary_rows(worksheet) -> dict[tuple, object]:
+    """Summary_Report data rows keyed by (MAIN_CODE, MAIN_BRANCH)."""
+    return {
+        (r[0].value, r[1].value): r[2]
+        for r in worksheet.iter_rows()
+        if r[0].value in {"MC10", "MC20", "UNMAPPED"}
+    }
+
+
+def _run_data_statis(raw_path: Path, reference: Path, out: Path):
+    config = ProcessingConfig(
+        raw_data_path=raw_path,
+        reference_data_path=reference,
+        workflow_id="report-data-statis",
+        output_report_path=out,
+    )
+    return PipelineOrchestrator.execute(config)
+
+
+def test_report_data_statis_counts_id_product(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    out = tmp_path / "data_statis.xlsx"
+    report = _run_data_statis(report_data_statis_bin_file, reference_file, out)
+    assert report.success is True, report.error_message
+    assert out.exists()
+
+    ws = load_workbook(out)["Summary_Report"]
+    rows = _statis_summary_rows(ws)
+    # MC10: P1, P1, P2 count (duplicates count separately, blank ID does not).
+    assert rows[("MC10", "Jakarta Pusat")].value == 3
+    # MC20: KANWIL SURABAYA and blank-KAWIL rows dropped, leaving one.
+    assert rows[("MC20", "Surabaya")].value == 1
+    # 0009 has no reference row but still survives the filters.
+    assert rows[("UNMAPPED", "UNMAPPED")].value == 1
+
+
+def test_report_data_statis_summary_cells_are_plain_integers(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    out = tmp_path / "data_statis_format.xlsx"
+    _run_data_statis(report_data_statis_bin_file, reference_file, out)
+
+    ws = load_workbook(out)["Summary_Report"]
+    cells = list(_statis_summary_rows(ws).values())
+    assert cells
+    assert all(isinstance(c.value, int) for c in cells)
+    assert all(c.number_format == "0" for c in cells)
+
+
+def test_report_data_statis_header_is_count_of_id_product(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    out = tmp_path / "data_statis_header.xlsx"
+    _run_data_statis(report_data_statis_bin_file, reference_file, out)
+
+    ws = load_workbook(out)["Summary_Report"]
+    headers = [
+        [c.value for c in row]
+        for row in ws.iter_rows()
+        if row[0].value == "MAIN_CODE"
+    ]
+    assert headers[0][:3] == ["MAIN_CODE", "MAIN_BRANCH", "Count of ID_PRODUCT"]
+
+
+def test_report_data_statis_exports_two_sheets_with_surviving_rows(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    out = tmp_path / "data_statis_sheets.xlsx"
+    _run_data_statis(report_data_statis_bin_file, reference_file, out)
+
+    workbook = load_workbook(out)
+    assert workbook.sheetnames == ["Summary_Report", "Enriched_Data"]
+    detail = workbook["Enriched_Data"]
+    # Enriched_Data is the row-level audit trail: every ingested row plus header.
+    assert detail.max_row == 11
+
+
+def test_report_data_statis_bin_parses_identically_to_txt(
+    report_data_statis_bin_file, report_data_statis_txt_file, reference_file, tmp_path
+):
+    bin_out = tmp_path / "from_bin.xlsx"
+    txt_out = tmp_path / "from_txt.xlsx"
+    _run_data_statis(report_data_statis_bin_file, reference_file, bin_out)
+    _run_data_statis(report_data_statis_txt_file, reference_file, txt_out)
+
+    bin_rows = {k: c.value for k, c in _statis_summary_rows(
+        load_workbook(bin_out)["Summary_Report"]
+    ).items()}
+    txt_rows = {k: c.value for k, c in _statis_summary_rows(
+        load_workbook(txt_out)["Summary_Report"]
+    ).items()}
+    assert bin_rows == txt_rows
+
+
+def test_report_data_statis_requires_reference_file(
+    report_data_statis_bin_file, tmp_path
+):
+    config = ProcessingConfig(
+        raw_data_path=report_data_statis_bin_file,
+        workflow_id="report-data-statis",
+        output_report_path=tmp_path / "no_ref.xlsx",
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is False
+    assert "reference" in (report.error_message or "").lower()
+
+
+def test_report_data_statis_definition_bakes_its_filters():
+    definition = get_definition("report-data-statis")
+    assert definition.label == "Report Data Statis"
+    assert definition.requires_reference is True
+    assert definition.aggfunc == "count"
+    assert definition.value_col == "ID_PRODUCT"
+    assert definition.exclude_segmen == ("KORPORASI",)
+    assert definition.kawil_include == "KANWIL MALANG"
+    assert definition.number_format == "0"
+    # KORPORASI is the default exclusion, but the operator may override it.
+    assert definition.supports_segment_filter is True
+    # KAWIL stays definition-baked - it is not an operator control.
+    assert definition.kawil_include == "KANWIL MALANG"
+    # ID_PRODUCT must never be coerced to a number by ingestion.
+    assert "ID_PRODUCT" not in definition.numeric_columns
+
+
+def test_report_data_statis_enriches_on_kode_unit_alias(
+    report_data_statis_bin_file, reference_file_uker_new, tmp_path
+):
+    """Raw header `KODE_UNIT` joins a mapping sheet whose key is `KODE UNIT`."""
+    out = tmp_path / "data_statis_alias.xlsx"
+    report = _run_data_statis(
+        report_data_statis_bin_file, reference_file_uker_new, out
+    )
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["Summary_Report"]
+    rows = _statis_summary_rows(ws)
+    assert rows[("MC10", "Jakarta Pusat")].value == 3
+    assert rows[("MC20", "Surabaya")].value == 1
+
+
+# --------------------------------------------------------------------------- #
+# Report Giro workflow (E2E)
+#
+# These are the regression guards required by the spec: they must fail if the
+# historical SALDO is overwritten, if a Deposito row is filled, or if an
+# unmatched Giro account receives anything (including an UNMAPPED sentinel).
+# --------------------------------------------------------------------------- #
+GIRO_HEADER_ROW = 1
+GIRO_SALDO_COL = 3
+GIRO_SALDO_UPDATE_COL = 4
+# Data rows in the master fixture, in sheet order.
+GIRO_ROW_MATCHED = 2      # float-key match  -> 2500
+GIRO_ROW_PLAIN = 3        # plain match      -> 7500
+GIRO_ROW_DEPOSITO = 4     # in monthly but JENIS=Deposito -> stays blank
+GIRO_ROW_MISSING = 5      # absent from monthly            -> stays blank
+GIRO_ROW_DUPLICATED = 6   # duplicated in monthly, first hit -> 1250000000000
+
+
+def _run_giro(monthly: Path, master: Path, out: Path, **filters):
+    config = ProcessingConfig(
+        raw_data_path=monthly,
+        master_data_path=master,
+        workflow_id="report-giro",
+        output_report_path=out,
+        **filters,
+    )
+    return PipelineOrchestrator.execute(config)
+
+
+@pytest.fixture
+def giro_output(giro_monthly_file, giro_master_file, tmp_path):
+    """Runs the workflow once and hands back the updated master worksheet."""
+    out = tmp_path / "giro_updated.xlsx"
+    report = _run_giro(giro_monthly_file, giro_master_file, out)
+    assert report.success is True, report.error_message
+    workbook = load_workbook(out)
+    return workbook, workbook["DAFTAR GIRO"]
+
+
+def test_giro_updates_matched_non_deposito_rows(giro_output):
+    _, ws = giro_output
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_UPDATE_COL).value == 2500
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+
+
+def test_giro_float_key_variant_still_matches(giro_output):
+    """Master key '1234567890' vs monthly float 1234567890.0."""
+    _, ws = giro_output
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_UPDATE_COL).value == 2500
+
+
+def test_giro_duplicate_monthly_account_takes_first_hit(giro_output):
+    _, ws = giro_output
+    assert ws.cell(GIRO_ROW_DUPLICATED, GIRO_SALDO_UPDATE_COL).value == 1250000000000
+
+
+def test_giro_historical_saldo_column_is_untouched(giro_output):
+    """Regression guard: writing to SALDO instead of SALDO UPDATE must fail here."""
+    _, ws = giro_output
+    saldo = [ws.cell(r, GIRO_SALDO_COL).value for r in range(2, 7)]
+    assert saldo == [1000, 500, 300, 900, 100]
+
+
+def test_giro_deposito_row_is_skipped(giro_output):
+    """Regression guard: the Deposito account exists in the monthly file."""
+    _, ws = giro_output
+    assert ws.cell(GIRO_ROW_DEPOSITO, GIRO_SALDO_UPDATE_COL).value is None
+    assert ws.cell(GIRO_ROW_DEPOSITO, GIRO_SALDO_COL).value == 300
+
+
+def test_giro_unmatched_account_stays_blank(giro_output):
+    """Regression guard: no UNMAPPED sentinel may reach a balance cell."""
+    _, ws = giro_output
+    assert ws.cell(GIRO_ROW_MISSING, GIRO_SALDO_UPDATE_COL).value is None
+
+
+def test_giro_no_unmapped_sentinel_anywhere_in_target_column(giro_output):
+    _, ws = giro_output
+    values = [ws.cell(r, GIRO_SALDO_UPDATE_COL).value for r in range(2, 7)]
+    assert "UNMAPPED" not in [str(v) for v in values]
+
+
+def test_giro_updated_cells_are_plain_integers(giro_output):
+    """Concatenated digits: no thousands separator, no decimal point, no E+12."""
+    _, ws = giro_output
+    updated = [
+        ws.cell(r, GIRO_SALDO_UPDATE_COL)
+        for r in (GIRO_ROW_MATCHED, GIRO_ROW_PLAIN, GIRO_ROW_DUPLICATED)
+    ]
+    assert all(isinstance(c.value, int) for c in updated)
+    assert all(not isinstance(c.value, str) for c in updated)
+    assert all(c.number_format == "0" for c in updated)
+    # The trillion-scale account stays an exact number, not a float/string.
+    assert ws.cell(GIRO_ROW_DUPLICATED, GIRO_SALDO_UPDATE_COL).value == 1250000000000
+
+
+def test_giro_segmen_exclude_drops_that_account_from_the_lookup(
+    giro_monthly_file_with_segmen, giro_master_file, tmp_path
+):
+    """An excluded segment simply never matches; its master cell is left as it was."""
+    out = tmp_path / "giro_segmen_excluded.xlsx"
+    report = _run_giro(
+        giro_monthly_file_with_segmen,
+        giro_master_file,
+        out,
+        segmen_exclude=["KORPORASI"],
+    )
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    # The KORPORASI account was filtered out of the monthly source.
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_UPDATE_COL).value is None
+    # Its historical SALDO is still untouched - nothing was blanked.
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_COL).value == 1000
+    # Kept segments are updated as usual.
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+
+
+def test_giro_source_exclude_drops_that_account_from_the_lookup(
+    giro_monthly_file_with_segmen, giro_master_file, tmp_path
+):
+    out = tmp_path / "giro_source_excluded.xlsx"
+    report = _run_giro(
+        giro_monthly_file_with_segmen, giro_master_file, out, source_exclude=["CMS"]
+    )
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(GIRO_ROW_DUPLICATED, GIRO_SALDO_UPDATE_COL).value is None
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+
+
+def test_giro_segmen_keep_only_retains_just_that_segment(
+    giro_monthly_file_with_segmen, giro_master_file, tmp_path
+):
+    out = tmp_path / "giro_segmen_kept.xlsx"
+    report = _run_giro(
+        giro_monthly_file_with_segmen, giro_master_file, out, segmen_filter="RITEL"
+    )
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_UPDATE_COL).value is None
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+    assert ws.cell(GIRO_ROW_DUPLICATED, GIRO_SALDO_UPDATE_COL).value == 1250000000000
+
+
+def test_giro_filters_are_a_no_op_when_the_monthly_file_lacks_those_columns(
+    giro_monthly_file, giro_master_file, tmp_path
+):
+    """A typical NO REK + SALDO IDR extract cannot match a filter, so nothing drops."""
+    out = tmp_path / "giro_filters_noop.xlsx"
+    report = _run_giro(
+        giro_monthly_file,
+        giro_master_file,
+        out,
+        segmen_filter="RITEL",
+        segmen_exclude=["KORPORASI"],
+        source_exclude=["CMS"],
+    )
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_UPDATE_COL).value == 2500
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+    assert ws.cell(GIRO_ROW_DUPLICATED, GIRO_SALDO_UPDATE_COL).value == 1250000000000
+
+
+def test_giro_preserves_other_sheets_and_headers(giro_output):
+    workbook, ws = giro_output
+    assert workbook.sheetnames == ["DAFTAR GIRO", "Catatan"]
+    assert workbook["Catatan"]["A1"].value == "Catatan operator"
+    assert workbook["Catatan"]["A2"].value == "Jangan dihapus"
+    headers = [ws.cell(GIRO_HEADER_ROW, c).value for c in range(1, 5)]
+    # The target contract is the month-neutral SALDO UPDATE, never SALDO JUNI.
+    assert headers == ["NO REK", "JENIS", "SALDO", "SALDO UPDATE"]
+
+
+def test_giro_month_named_target_column_is_not_the_contract(
+    giro_monthly_file, tmp_path
+):
+    """A master offering only SALDO JUNI fails loudly rather than being written."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "DAFTAR GIRO"
+    sheet.append(["NO REK", "JENIS", "SALDO", "SALDO JUNI"])
+    sheet.append(["1234567890", "Giro", 1000, None])
+    master = tmp_path / "giro_master_juni.xlsx"
+    workbook.save(master)
+
+    out = tmp_path / "giro_juni.xlsx"
+    report = _run_giro(giro_monthly_file, master, out)
+    assert report.success is False
+    assert "SALDO UPDATE" in report.error_message
+    assert "Sheets scanned" in report.error_message
+    assert out.exists() is False
+
+
+def test_giro_does_not_produce_a_summary_report_sheet(giro_output):
+    workbook, _ = giro_output
+    assert "Summary_Report" not in workbook.sheetnames
+
+
+def test_giro_leaves_the_source_master_file_unmodified(
+    giro_monthly_file, giro_master_file, tmp_path
+):
+    """The master is the template; the run writes to the output path only."""
+    before = giro_master_file.read_bytes()
+    _run_giro(giro_monthly_file, giro_master_file, tmp_path / "giro_copy.xlsx")
+    assert giro_master_file.read_bytes() == before
+
+
+def test_giro_reports_unmatched_account_count(
+    giro_monthly_file, giro_master_file, tmp_path
+):
+    report = _run_giro(
+        giro_monthly_file, giro_master_file, tmp_path / "giro_telemetry.xlsx"
+    )
+    assert report.success is True, report.error_message
+    # 5 master data rows scanned; only the missing Giro account is unmatched
+    # (the Deposito row is skipped by rule, not by a failed lookup).
+    assert report.total_records_processed == 5
+    assert report.unmapped_records_count == 1
+
+
+def test_giro_requires_master_file(giro_monthly_file, tmp_path):
+    config = ProcessingConfig(
+        raw_data_path=giro_monthly_file,
+        workflow_id="report-giro",
+        output_report_path=tmp_path / "giro_no_master.xlsx",
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is False
+    assert "master" in (report.error_message or "").lower()
+
+
+def test_giro_unresolvable_monthly_columns_fail_loudly(
+    giro_monthly_file_unresolvable, giro_master_file, tmp_path
+):
+    out = tmp_path / "giro_unresolvable.xlsx"
+    report = _run_giro(giro_monthly_file_unresolvable, giro_master_file, out)
+    assert report.success is False
+    message = report.error_message or ""
+    # The error must name the sheets scanned and the aliases attempted.
+    assert "Sheet" in message
+    assert "NO REK" in message
+    # A failed run must not leave a partial output that looks successful.
+    assert not out.exists()
+
+
+def test_giro_gui_offers_excel_pickers_not_pipe_delimited_labels():
+    button, title, filetypes = raw_picker_config("report-giro")
+    assert "Giro" in button
+    assert "pipe-delimited" not in title.lower()
+    patterns = " ".join(pattern for _, pattern in filetypes)
+    assert "*.xlsx" in patterns and "*.xls" in patterns
+
+    master_button, master_title = master_picker_config("report-giro")
+    assert "Giro" in master_button
+    # Qlola's "ID -> MAIN_CODE" wording would misdescribe the Giro master.
+    assert "MAIN_CODE" not in master_title
+
+
+def test_other_workflows_keep_the_text_raw_picker():
+    _, title, filetypes = raw_picker_config("akumulasi")
+    assert "pipe-delimited" in title.lower()
+    assert "*.txt" in " ".join(pattern for _, pattern in filetypes)
+
+
+def test_giro_exposes_segmen_and_source_filters_like_the_others():
+    """Giro applies them to its monthly source, so the fields must be live."""
+    assert segment_filter_enabled("report-giro") is True
+    assert source_filter_enabled("report-giro") is True
+
+
+def test_segment_filter_enabled_for_every_workflow():
+    """Operators choose the segments per run, on every report without exception."""
+    for workflow_id in WorkflowId:
+        assert segment_filter_enabled(workflow_id) is True
+        assert source_filter_enabled(workflow_id) is True
+
+
+def test_giro_cli_rejects_a_missing_master_path(giro_monthly_file, tmp_path):
+    from typer.testing import CliRunner
+
+    from src.cli import app
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "process",
+            "--raw", str(giro_monthly_file),
+            "--workflow", "report-giro",
+            "--out", str(tmp_path / "giro_cli.xlsx"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "--master" in result.output
+    assert "giro master" in result.output.lower()
+
+
+def test_giro_cli_runs_with_both_paths(giro_monthly_file, giro_master_file, tmp_path):
+    from typer.testing import CliRunner
+
+    from src.cli import app
+
+    out = tmp_path / "giro_cli_ok.xlsx"
+    result = CliRunner().invoke(
+        app,
+        [
+            "process",
+            "--raw", str(giro_monthly_file),
+            "--master", str(giro_master_file),
+            "--workflow", "report-giro",
+            "--out", str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+
+
+def test_giro_definition_declares_its_inputs():
+    definition = get_definition("report-giro")
+    assert definition.label == "Report Giro"
+    assert definition.requires_master_data is True
+    assert definition.requires_reference is False
+    # Plain integers, matching every other report - not "#,##0.00".
+    assert definition.number_format == "0"
+    # The filters are live with empty defaults; nothing is dropped unasked.
+    assert definition.supports_segment_filter is True
+    assert definition.has_source_filter is True
+    assert definition.segmen_include is None
+    assert definition.exclude_segmen == ()
+    assert definition.source_exclude == ()
 
 
 # --------------------------------------------------------------------------- #
@@ -1157,10 +1851,10 @@ def test_qlola_source_exclude_match_is_case_insensitive(
     assert grand_total["Grand Total"] == 4  # identical to the uppercase default (mapped-only)
 
 
-def test_source_exclude_ignored_by_workflows_without_the_flag(
+def test_source_exclude_is_a_no_op_without_a_source_column(
     rincian_portal_bg_file, tmp_path
 ):
-    """A stale SOURCE value must not alter a workflow that does not declare it."""
+    """A SOURCE value must not alter an extract that has no SOURCE column."""
     out = tmp_path / "portal_bg_with_source.xlsx"
     config = ProcessingConfig(
         raw_data_path=rincian_portal_bg_file,
@@ -1181,7 +1875,8 @@ def test_source_exclude_ignored_by_workflows_without_the_flag(
     assert rows[("B02", "Branch Two")] == 500
 
 
-def test_existing_workflows_have_no_source_filter_defaults():
+def test_only_qlola_drops_a_source_value_by_default():
+    """Every workflow offers the field; only Qlola pre-fills it with a drop."""
     for workflow_id in (
         WorkflowId.AKUMULASI,
         WorkflowId.RINCIAN_VOL_TF,
@@ -1189,27 +1884,29 @@ def test_existing_workflows_have_no_source_filter_defaults():
         WorkflowId.TIMESERIES_FBI_BRIVA,
     ):
         definition = get_definition(workflow_id)
-        assert definition.has_source_filter is False
+        assert definition.has_source_filter is True
         assert definition.source_exclude == ()
 
 
 # --------------------------------------------------------------------------- #
-# GUI SOURCE field / config propagation
+# GUI filter fields / config propagation
 # --------------------------------------------------------------------------- #
-def test_gui_source_field_enabled_only_for_qlola():
-    assert source_filter_enabled(WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA) is True
-    for workflow_id in (
-        WorkflowId.AKUMULASI,
-        WorkflowId.RINCIAN_VOL_TF,
-        WorkflowId.RINCIAN_PORTAL_BG,
-        WorkflowId.TIMESERIES_FBI_BRIVA,
-    ):
-        assert source_filter_enabled(workflow_id) is False
-
-
 def test_gui_source_field_default_text():
     assert default_source_text(WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA) == "CMS"
     assert default_source_text(WorkflowId.AKUMULASI) == ""
+
+
+def test_gui_segmen_fields_are_seeded_with_the_workflow_defaults():
+    """The operator must be able to see (and edit) what a report drops by default."""
+    assert default_segmen_exclude_text("report-data-statis") == "KORPORASI"
+    assert default_segmen_exclude_text("rincian-vol-tf") == "Wholesale"
+    assert default_segmen_include_text("timeseries-fbi-briva") == "NONWHOLESALE"
+    # No default rule, but the field is still live.
+    assert default_segmen_include_text("akumulasi") == ""
+    assert default_segmen_exclude_text("akumulasi") == ""
+    # Report Giro's fields are live but seeded empty - it drops nothing by default.
+    assert default_segmen_exclude_text("report-giro") == ""
+    assert default_segmen_include_text("report-giro") == ""
 
 
 @pytest.mark.parametrize(
@@ -1223,8 +1920,8 @@ def test_gui_source_field_default_text():
         ("CMS,,MOBILE", ["CMS", "MOBILE"]),
     ],
 )
-def test_gui_parse_source_exclude(text, expected):
-    assert parse_source_exclude(text) == expected
+def test_gui_parse_exclude_list(text, expected):
+    assert parse_exclude_list(text) == expected
 
 
 def test_gui_edited_source_field_reaches_the_workflow(
@@ -1238,20 +1935,178 @@ def test_gui_edited_source_field_reaches_the_workflow(
         master_data_path=qlola_master_file,
         workflow_id="timeseries-active-user-qlola",
         output_report_path=tmp_path / "unused.xlsx",
-        source_exclude=parse_source_exclude("CMS, MOBILE"),
+        source_exclude=parse_exclude_list("CMS, MOBILE"),
     )
     assert strategy.resolve_source_exclude(config) == ["CMS", "MOBILE"]
 
 
-def test_workflow_without_flag_resolves_empty_source_exclude(tmp_path):
-    strategy = get_strategy(WorkflowId.RINCIAN_PORTAL_BG)
-    config = ProcessingConfig(
-        raw_data_path=tmp_path / "raw.csv",
-        workflow_id="rincian-portal-bg",
+class _FlaglessStrategy(WorkflowStrategy):
+    """Declares neither filter flag, exercising the base-class opt-in guard.
+
+    Every shipped workflow now exposes both filters, so the guard that stops a
+    stale GUI/CLI value from leaking into a workflow that never opted in is
+    covered by a stub rather than pinned to whichever report happens to opt out.
+    """
+
+    @property
+    def definition(self) -> WorkflowDefinition:
+        return WorkflowDefinition(
+            workflow_id=WorkflowId.REPORT_GIRO,
+            label="Flagless",
+            requires_reference=False,
+            group_cols=(),
+            value_col="VALUE",
+            report_title="Flagless",
+            detail_sheet_name="",
+        )
+
+
+def _flagless_config(tmp_path, **overrides) -> ProcessingConfig:
+    return ProcessingConfig(
+        raw_data_path=tmp_path / "raw.xlsx",
+        master_data_path=tmp_path / "master.xlsx",
+        workflow_id="report-giro",
         output_report_path=tmp_path / "out.xlsx",
-        source_exclude=["CMS"],
+        **overrides,
     )
+
+
+def test_workflow_without_flag_resolves_empty_source_exclude(tmp_path):
+    strategy = _FlaglessStrategy()
+    config = _flagless_config(tmp_path, source_exclude=["CMS"])
     assert strategy.resolve_source_exclude(config) == []
+
+
+def test_giro_resolves_the_operator_source_exclude(tmp_path):
+    """Giro opted in, so its SOURCE field is honored rather than discarded."""
+    strategy = get_strategy(WorkflowId.REPORT_GIRO)
+    config = _flagless_config(tmp_path, source_exclude=["CMS", " MOBILE "])
+    assert strategy.resolve_source_exclude(config) == ["CMS", "MOBILE"]
+
+
+# --------------------------------------------------------------------------- #
+# Runtime SEGMEN overrides (operator choice beats the workflow default)
+# --------------------------------------------------------------------------- #
+def _statis_config(raw, reference, out, **overrides):
+    return ProcessingConfig(
+        raw_data_path=raw,
+        reference_data_path=reference,
+        workflow_id="report-data-statis",
+        output_report_path=out,
+        **overrides,
+    )
+
+
+def test_operator_can_keep_korporasi_by_clearing_the_exclusion(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    """An empty exclusion list means 'drop nothing', re-including KORPORASI."""
+    out = tmp_path / "statis_with_korporasi.xlsx"
+    report = PipelineOrchestrator.execute(
+        _statis_config(
+            report_data_statis_bin_file, reference_file, out, segmen_exclude=[]
+        )
+    )
+    assert report.success is True, report.error_message
+
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # The two KORPORASI rows (P4, P5) now join the default count of 3.
+    assert rows[("MC10", "Jakarta Pusat")].value == 5
+
+
+def test_operator_can_replace_the_default_exclusion(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    out = tmp_path / "statis_drop_consumer.xlsx"
+    report = PipelineOrchestrator.execute(
+        _statis_config(
+            report_data_statis_bin_file,
+            reference_file,
+            out,
+            segmen_exclude=["Consumer"],
+        )
+    )
+    assert report.success is True, report.error_message
+
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # KORPORASI (P4, P5) is kept and the Consumer row (P1) is dropped instead.
+    assert rows[("MC10", "Jakarta Pusat")].value == 4
+
+
+def test_operator_can_keep_only_one_segment(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    out = tmp_path / "statis_consumer_only.xlsx"
+    report = PipelineOrchestrator.execute(
+        _statis_config(
+            report_data_statis_bin_file,
+            reference_file,
+            out,
+            segmen_filter="consumer",
+            segmen_exclude=[],
+        )
+    )
+    assert report.success is True, report.error_message
+
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # Only the Consumer + KANWIL MALANG row survives under MC10.
+    assert rows[("MC10", "Jakarta Pusat")].value == 1
+
+
+def test_untouched_filters_keep_the_workflow_defaults(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    """None (nothing supplied) must still drop KORPORASI, as before."""
+    out = tmp_path / "statis_defaults.xlsx"
+    report = PipelineOrchestrator.execute(
+        _statis_config(report_data_statis_bin_file, reference_file, out)
+    )
+    assert report.success is True, report.error_message
+
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    assert rows[("MC10", "Jakarta Pusat")].value == 3
+
+
+def test_briva_operator_can_clear_the_nonwholesale_inclusion(tmp_path):
+    strategy = get_strategy(WorkflowId.TIMESERIES_FBI_BRIVA)
+    base = {
+        "raw_data_path": tmp_path / "raw.csv",
+        "workflow_id": "timeseries-fbi-briva",
+        "output_report_path": tmp_path / "out.xlsx",
+    }
+    # Untouched: the definition default still applies.
+    assert strategy.resolve_segment_filter(ProcessingConfig(**base)) == "NONWHOLESALE"
+    # Cleared field: every segment contributes.
+    assert (
+        strategy.resolve_segment_filter(ProcessingConfig(**base, segmen_filter=""))
+        is None
+    )
+    # Edited field: the operator's value wins over the baked default.
+    assert (
+        strategy.resolve_segment_filter(
+            ProcessingConfig(**base, segmen_filter="WHOLESALE")
+        )
+        == "WHOLESALE"
+    )
+
+
+def test_segmen_overrides_ignored_where_the_fields_are_disabled(tmp_path):
+    strategy = _FlaglessStrategy()
+    config = _flagless_config(
+        tmp_path, segmen_filter="Consumer", segmen_exclude=["KORPORASI"]
+    )
+    assert strategy.resolve_segment_filter(config) is None
+    assert strategy.resolve_segmen_exclude(config) == []
+
+
+def test_giro_resolves_the_operator_segmen_overrides(tmp_path):
+    """Giro opted in, so its SEGMEN fields reach the monthly-source filter."""
+    strategy = get_strategy(WorkflowId.REPORT_GIRO)
+    config = _flagless_config(
+        tmp_path, segmen_filter="Consumer", segmen_exclude=["KORPORASI"]
+    )
+    assert strategy.resolve_segment_filter(config) == "Consumer"
+    assert strategy.resolve_segmen_exclude(config) == ["KORPORASI"]
 
 
 # --------------------------------------------------------------------------- #

@@ -6,23 +6,46 @@ No Python install needed - just double-click TongkatGaibExcel.exe
 How to run
 ----------
 1. Double-click TongkatGaibExcel.exe
-2. Select a workflow from the dropdown
-3. Select your raw data file (.txt / .csv, pipe-delimited)
+2. Select a workflow from the dropdown (listed in daily reporting order)
+3. Select your source file (pipe-delimited .txt / .csv / .bin, or Excel for Giro)
 4. If prompted: select your reference mapping file (.xlsx)
-5. If prompted (Qlola): select your master-data file (.xlsx)
-6. Choose where to save the output report (.xlsx)
-7. Optional: type a SEGMEN filter or leave blank
+5. If prompted (Qlola / Giro): select the extra workbook
+6. Choose where to save the output (.xlsx)
+7. Check the filter boxes (they are pre-filled per workflow - see below)
 8. Click "Run Pipeline"
 
-Workflows
----------
-- Report Summary Akumulasi (needs reference mapping)
-- Rincian Vol TF
-- Rincian Portal BG
-- Time Series FBI Briva (needs reference mapping)
-- Time Series Active User Qlola (needs reference + master data)
+Filter boxes (SEGMEN and SOURCE)
+--------------------------------
+Every workflow lets you choose what goes in and what comes out. The boxes are
+pre-filled with what that report normally does, and you can edit them for a
+one-off run:
 
-Qlola (Workflow 5) — three input files
+  SEGMEN keep only : keep ONLY this segment. Blank = keep every segment.
+  SEGMEN exclude   : segments to drop, comma-separated. Blank = drop none.
+  SOURCE exclude   : SOURCE values to drop, comma-separated. Blank = drop none.
+
+Examples:
+  - Report Data Statis pre-fills "KORPORASI" in SEGMEN exclude. Clear the box to
+    include corporate accounts this time; leave it to drop them as usual.
+  - Rincian Vol TF pre-fills "Wholesale" in SEGMEN exclude.
+  - Time Series FBI Briva pre-fills "NONWHOLESALE" in SEGMEN keep only.
+  - Time Series Active User Qlola pre-fills "CMS" in SOURCE exclude.
+
+Matching ignores upper/lower case and extra spaces. Rows with a blank SEGMEN are
+always kept. Switching workflow resets the boxes to that workflow's defaults.
+The Summary sheet's "Filter Applied" line records what the run actually used.
+
+Workflows (dropdown order)
+--------------------------
+1. Report Summary Akumulasi (needs reference mapping)
+2. Time Series Active User Qlola (needs reference + master data)
+3. Report Data Statis (needs reference mapping; raw may be a .bin extract)
+4. Rincian Vol TF
+5. Rincian Portal BG
+6. Time Series FBI Briva (needs reference mapping)
+7. Report Giro (needs monthly giro workbook + giro master; no reference mapping)
+
+Qlola (Workflow 2) — three input files
 --------------------------------------
 1. Raw pipe-delimited .csv (SOURCE, ID, FREKUENSI, KODE_UKER, ...)
 2. UKER reference workbook (KODE_UKER -> MAIN_CODE for detail only)
@@ -31,6 +54,27 @@ Qlola (Workflow 5) — three input files
 For ``MASTER DATA STATIS MALANG`` workbooks, the Qlola user ID lives in the
 ``ID_PRODUCT`` column (not ``CIF``). The Summary counts users by the master
 ``MAIN CODE`` after VLOOKUP on ID — same as manual Excel step 4.
+
+Report Data Statis (Workflow 3)
+-------------------------------
+Raw is pipe-delimited (often a .bin extract). Needs a UKER/unit mapping
+workbook. Keeps KANWIL MALANG, drops SEGMEN KORPORASI by default, and reports
+Count of ID_PRODUCT per branch. The KORPORASI drop is editable in the SEGMEN
+exclude box; KANWIL MALANG is always applied.
+
+Report Giro (Workflow 7) — two Excel workbooks
+----------------------------------------------
+1. Monthly giro source workbook (NO REK + SALDO IDR)
+2. Giro master workbook (the file whose SALDO UPDATE column is filled in)
+
+The master you pick is never overwritten. The updated copy is saved to the
+output path you choose. Deposito rows are skipped. Accounts missing from the
+monthly file are left blank. Balances are written as plain whole numbers
+(format 0) - concatenated digits, no commas and no decimal point.
+
+The SEGMEN and SOURCE boxes work here too: they filter the monthly source, so a
+filtered-out account keeps whatever its master cell already had. If your monthly
+file only has NO REK and SALDO IDR, they simply do nothing.
 
 Reference file column names
 ---------------------------
@@ -45,6 +89,7 @@ Multi-sheet Excel files are supported - it scans sheets until it finds a match.
 Output
 ------
 Creates an Excel report with a Summary sheet (and detail/audit data as applicable).
+Report Giro writes an updated copy of the master workbook instead of a pivot.
 
 Troubleshooting
 ---------------

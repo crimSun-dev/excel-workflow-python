@@ -56,9 +56,15 @@ class ExcelReportExporter:
         value_columns: tuple[str, ...] | None = None,
         display_names: dict[str, str] | None = None,
         numeric_rounding: NumericRounding = "round",
+        format_detail_values: bool = True,
     ):
         self.number_format = number_format
         self.numeric_rounding = numeric_rounding
+        # Count workflows aggregate a *textual* column (e.g. ID_PRODUCT): the
+        # summary holds integer counts, but the same column on the detail sheet
+        # still holds the raw identifiers, which must be written verbatim rather
+        # than coerced to a number.
+        self.format_detail_values = format_detail_values
         # Parameterized so each workflow can supply its own value column
         # (VOLUME_IN_IDR vs AMOUNT_IN_IDR), report heading, and detail tab name.
         self.value_column = value_column
@@ -281,7 +287,7 @@ class ExcelReportExporter:
             (self.report_title, ""),
             ("Processing Timestamp:", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             ("Total Records Processed:", f"{total_records:,}"),
-            ("Filter Applied (SEGMEN):", segment_filter_applied or "None (All Segments)"),
+            ("Filter Applied:", segment_filter_applied or "None (All Segments)"),
         ]
         for label, value in meta:
             row = ws.max_row + 1 if ws.max_row > 1 or ws["A1"].value else ws.max_row
@@ -345,7 +351,9 @@ class ExcelReportExporter:
             cell.alignment = Alignment(horizontal="center")
             cell.border = _BORDER
 
-        value_col_indices = self._value_col_indices(columns)
+        value_col_indices = (
+            self._value_col_indices(columns) if self.format_detail_values else set()
+        )
         for r_offset, (_, record) in enumerate(enriched_df.iterrows()):
             excel_row = 2 + r_offset
             for col_idx, col_name in enumerate(columns, start=1):

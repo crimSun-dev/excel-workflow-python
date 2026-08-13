@@ -29,6 +29,7 @@ AKUMULASI_DEFINITION = WorkflowDefinition(
     numeric_columns=("FBI", "VOLUME_IN_IDR"),
     required_columns=("FBI", "VOLUME_IN_IDR"),
     supports_segment_filter=True,
+    has_source_filter=True,
     # Sum of FBI sits immediately left of volume to mirror the QLOLA pivot.
     value_cols=("FBI", "VOLUME_IN_IDR"),
     value_display_names=(("FBI", "Sum of FBI"),),

@@ -34,8 +34,11 @@ TIMESERIES_FBI_BRIVA_DEFINITION = WorkflowDefinition(
     numeric_rounding="ceil",
     numeric_columns=("VOLUME_IDR",),
     required_columns=("SEGMEN", "VOLUME_IDR"),
-    # Definition-baked inclusion: only NONWHOLESALE rows contribute to the pivot.
+    # Default inclusion: only NONWHOLESALE rows contribute to the pivot. The
+    # operator can widen or clear this from the GUI/CLI for a one-off run.
     segmen_include="NONWHOLESALE",
+    supports_segment_filter=True,
+    has_source_filter=True,
     value_display_names=(("VOLUME_IDR", "Sum of VOLUME_IDR"),),
 )
 

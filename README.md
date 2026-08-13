@@ -28,7 +28,8 @@ delete the `.venv` folder, and run the batch file again. Or use the standalone
 |---|---|---|
 | Text to Columns (pipe `\|` delimiter) | Parse pipe-delimited raw file | `src/ingestion.py` |
 | VLOOKUP against reference workbook | Left-join `KODE_UKER` → `MAIN_CODE`, `MAIN_BRANCH` | `src/enrichment.py` |
-| PivotTable (Sum of value column) | Group-by + sum, optional `SEGMEN` include/exclude | `src/aggregation.py` |
+| PivotTable (Sum of value column) | Group-by + sum | `src/aggregation.py` |
+| Ticking/unticking segments in the Filters pane | Editable `SEGMEN` include/exclude fields, pre-set per workflow | `src/aggregation.py` |
 | Tabular layout, no subtotals | Styled `.xlsx` export + Grand Total | `src/exporter.py` |
 
 ## Workflows
@@ -37,34 +38,86 @@ Pick a workflow in the GUI dropdown or via the CLI `--workflow` flag. Each is a
 `WorkflowStrategy` (see `src/workflows/`) sharing one ingest → optional enrich →
 aggregate → export skeleton, dispatched through `WORKFLOW_REGISTRY`.
 
-| Workflow (`--workflow`) | Reference file | Grouped by | Sums | SEGMEN rule | Number format |
-|---|---|---|---|---|---|
-| Report Summary Akumulasi (`akumulasi`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | `VOLUME_IN_IDR` | Optional include filter | `#,##0.00` |
-| Rincian Vol TF (`rincian-vol-tf`) | Not used | `MAINBR`, `MBDESC` | `AMOUNT_IN_IDR` | Excludes `Wholesale` (blank kept) | `0` |
-| Rincian Portal BG (`rincian-portal-bg`) | Not used | `MAINBR`, `MBNAME` | `AMOUNT_IN_IDR` | None | `0` |
+The table lists all seven workflows in the order they appear in the GUI dropdown
+and the CLI `--workflow` help — the operator's daily sequence. That order comes
+from the `WorkflowId` declaration order in `src/workflows/base.py` and nowhere
+else, so the selector, the CLI listing, and this table cannot drift apart.
 
-Every workflow produces a two-sheet workbook: a **Summary_Report** (tabular
-view, corporate styling, Grand Total, explicit numeric format — no `E+12`
-scientific notation) plus a row-level detail sheet (**Enriched_Data** for
-Akumulasi, **Detail_Data** for the Rincian workflows).
+| # | Workflow (`--workflow`) | Reference file | Grouped by | Aggregates | Default SEGMEN rule | Number format |
+|---|---|---|---|---|---|---|
+| 1 | Report Summary Akumulasi (`akumulasi`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | Sum of `FBI`, Sum of `VOLUME_IN_IDR` | None | `0` |
+| 2 | Time Series Active User Qlola (`timeseries-active-user-qlola`) | **Required** (plus `--master`) | `MAIN_CODE` × `USER_AKTIF` crosstab | **Count** of distinct `ID`, active at `FREKUENSI` ≥ 5 | None (excludes `SOURCE` = `CMS`) | `0` |
+| 3 | Report Data Statis (`report-data-statis`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | **Count** of `ID_PRODUCT` | Excludes `KORPORASI` (blank kept); also keeps only `KAWIL` = `KANWIL MALANG` | `0` |
+| 4 | Rincian Vol TF (`rincian-vol-tf`) | Not used | `MAINBR`, `MBDESC` | Sum of `AMOUNT_IN_IDR` | Excludes `Wholesale` (blank kept) | `0` |
+| 5 | Rincian Portal BG (`rincian-portal-bg`) | Not used | `MAINBR`, `MBNAME` | Sum of `AMOUNT_IN_IDR` | None | `0` |
+| 6 | Time Series FBI Briva (`timeseries-fbi-briva`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | Sum of `VOLUME_IDR` (rounded up) | Keeps only `NONWHOLESALE` | `0` |
+| 7 | Report Giro (`report-giro`) | Not used (needs `--master`) | n/a — fills the master's `SALDO UPDATE` | Copies monthly `SALDO IDR` per account | None (skips `JENIS` = `Deposito`) | `0` |
 
-### SOURCE filter config keys
+The SEGMEN rule above is only each workflow's **default**. Every workflow
+exposes the filters as live controls, so the operator decides per run
+which segments go in and which come out — see
+[Choosing what to include and exclude](#choosing-what-to-include-and-exclude).
 
-Two optional `WorkflowDefinition` keys (`src/workflows/base.py`) drive the
-SOURCE exclusion feature. Both default to off, so workflows that predate them —
-Akumulasi, Rincian Vol TF, Rincian Portal BG, Time Series FBI Briva — are
-unaffected and their SOURCE field stays greyed out.
+Every workflow except Report Giro produces a two-sheet workbook: a
+**Summary_Report** (tabular view, corporate styling, Grand Total, explicit
+numeric format — no `E+12` scientific notation) plus a row-level detail sheet
+(**Enriched_Data** for Akumulasi, **Detail_Data** for the Rincian workflows).
+
+### Report Giro (master-balance update)
+
+Report Giro is the one workflow that does **not** build a pivot. It replaces the
+manual Ctrl+F reconciliation: it reads the monthly giro workbook, then writes
+each account's IDR balance into the `SALDO UPDATE` column of the giro master
+workbook and saves the result to `--out`.
+
+| Input | Flag | What it is |
+|---|---|---|
+| Monthly source | `--raw` | The month's giro extract (`.xlsx`/`.xls`/`.xlsm`/`.csv`), keyed by `NO REK` with a `SALDO IDR` balance column |
+| Giro master | `--master` | The target workbook (e.g. `DAFTAR REKENING GIRO TSPM UPDATE JUNI.xlsx`) whose `SALDO UPDATE` column is filled in |
+| Output | `--out` | Where the updated copy is written — the master you select is **never** modified |
+
+Rules the workflow enforces (each is covered by a regression test):
+
+- The historical `SALDO` column is never written to; only the resolved
+  `SALDO UPDATE` column changes.
+- Rows whose `JENIS` is `Deposito` (case-insensitive) are skipped even when the
+  account exists in the monthly file.
+- Master accounts absent from the monthly file are left **blank** — the
+  `UNMAPPED` sentinel never lands in a balance cell.
+- Duplicate accounts in the monthly file take the first hit (VLOOKUP semantics),
+  and keys match across Excel's int/float/text storage (`1234567890` matches
+  `1234567890.0`).
+- Other sheets, styling, and formulas in the master are preserved: the update is
+  done cell-by-cell with openpyxl, never via a pandas export.
+- Updated cells are numeric whole rupiah with number format `0` — concatenated
+  digits, no thousands separator and no decimals, and never scientific notation.
+- The SEGMEN and SOURCE filters apply to the **monthly source**: a filtered-out
+  account simply never matches, so its master cell is left as it was. A monthly
+  extract with only `NO REK` + `SALDO IDR` makes them a no-op.
+
+Columns are resolved by alias (`NO REK` / `NO REKENING` / `NOREK` / `NO_REK`,
+`SALDO IDR` / `SALDO_IDR` / `SALDO IN IDR`, `SALDO UPDATE` / `SALDO_UPDATE`) rather
+than by fixed column letters, and a header row is located by scanning the top of
+each sheet — so a title banner above the table is fine. If no sheet resolves the
+required columns the run fails loudly, listing the sheets scanned and the
+aliases attempted, and writes no output file.
+
+### Filter config keys
+
+Four `WorkflowDefinition` keys (`src/workflows/base.py`) hold each workflow's
+filter defaults and declare which controls it exposes.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `source_exclude` | `tuple[str, ...]` | `()` | SOURCE values dropped before aggregation, matched case-insensitively after trimming. Empty means no filtering. |
-| `has_source_filter` | `bool` | `False` | Declares that this workflow exposes the SOURCE control. The GUI enables its SOURCE field only for these workflows; for all others the field is disabled and its value is ignored at runtime. |
+| `segmen_include` | `str \| None` | `None` | SEGMEN value to keep, matched case-insensitively after trimming. Only Briva sets one (`NONWHOLESALE`). |
+| `exclude_segmen` | `tuple[str, ...]` | `()` | SEGMEN values dropped before aggregation. Report Data Statis drops `KORPORASI`, Rincian Vol TF drops `Wholesale`. |
+| `source_exclude` | `tuple[str, ...]` | `()` | SOURCE values dropped before enrichment. Only Qlola sets one (`CMS`). |
+| `supports_segment_filter` / `has_source_filter` | `bool` | `False` | Declares that the workflow exposes that control. `True` for every workflow, including Report Giro (which applies them to its monthly source); a disabled field's value is ignored at runtime. |
 
-Only **Time Series Active User Qlola** sets them today
-(`source_exclude=("CMS",)`, `has_source_filter=True`). An operator can override
-the list at runtime through the GUI's SOURCE field, which maps to
-`ProcessingConfig.source_exclude`: `None` keeps the definition default, and a
-cleared field yields `[]`, meaning exclude nothing.
+At runtime the operator's choice wins over the default. `ProcessingConfig`
+carries three matching overrides — `segmen_filter`, `segmen_exclude`, and
+`source_exclude` — where `None` keeps the workflow default while an empty
+string/list explicitly means "do not filter on this dimension".
 
 ### Reading the numbers (operator notes)
 
@@ -115,19 +168,54 @@ python -m src.cli process --raw vol_tf.csv --workflow rincian-vol-tf --out vol_t
 
 # Rincian Portal BG — no reference file
 python -m src.cli process --raw portal_bg.csv --workflow rincian-portal-bg --out portal_bg_report.xlsx
+
+# Report Data Statis — reference file required; raw may be a .bin extract
+python -m src.cli process --raw data_statis.bin --workflow report-data-statis --ref "Mapping GL FBI Vol Uker.xlsx" --out data_statis_report.xlsx
+
+# Report Giro — --raw is the monthly workbook, --master is the giro master to update
+python -m src.cli process --raw giro_20260630_monthly.xlsx --workflow report-giro --master "DAFTAR REKENING GIRO TSPM UPDATE JUNI.xlsx" --out giro_updated.xlsx
 ```
 
 Options:
 
 | Flag | Alias | Description |
 |---|---|---|
-| `--raw` | `-r` | Path to raw pipe-delimited `.txt`/`.csv` file (required) |
-| `--workflow` | `-w` | Workflow: `akumulasi` (default), `rincian-vol-tf`, `rincian-portal-bg` |
-| `--ref` | `-f` | Path to reference mapping `.xlsx`/`.csv` (required for `akumulasi` only) |
+| `--raw` | `-r` | Path to raw pipe-delimited `.txt`/`.csv`/`.bin` file (required); for `report-giro` the monthly giro `.xlsx` |
+| `--workflow` | `-w` | Workflow, in selector order: `akumulasi` (default), `timeseries-active-user-qlola`, `report-data-statis`, `rincian-vol-tf`, `rincian-portal-bg`, `timeseries-fbi-briva`, `report-giro` |
+| `--ref` | `-f` | Path to reference mapping `.xlsx`/`.csv` (required for `akumulasi`, `timeseries-active-user-qlola`, `report-data-statis`, and `timeseries-fbi-briva`) |
+| `--master` | `-m` | Master workbook: `ID` → `MAIN_CODE` for `timeseries-active-user-qlola`, or the giro master to update for `report-giro` |
 | `--out` | `-o` | Output report path (default `./Financial_Summary_Report.xlsx`) |
-| `--segment` | `-s` | Optional `SEGMEN` filter (Akumulasi only; e.g. `Wholesale`, `Corporate`) |
+| `--segment` | `-s` | Keep only this `SEGMEN` (e.g. `NONWHOLESALE`). Omit for the workflow default; pass `""` to keep every segment |
+| `--exclude-segmen` | | Comma-separated `SEGMEN` values to drop (e.g. `KORPORASI,Wholesale`). Omit for the workflow default; pass `""` to drop none |
+| `--exclude-source` | | Comma-separated `SOURCE` values to drop (e.g. `CMS`). Omit for the workflow default; pass `""` to drop none |
 | `--delimiter` | `-d` | Raw file delimiter (default `\|`) |
 | `--gui` | `-g` | Launch the GUI file picker instead |
+
+### Choosing what to include and exclude
+
+The manual pivot let the operator tick and untick segments per run, so the
+automated filters are **defaults, not hardcoded rules**. Each workflow declares
+what it normally drops; the GUI seeds its fields with those values and leaves
+them editable, and the CLI flags above do the same headlessly.
+
+| Dimension | Control | Default | Cleared field / `""` |
+|---|---|---|---|
+| Keep only one `SEGMEN` | `SEGMEN keep only` / `--segment` | e.g. `NONWHOLESALE` for Briva | Every segment counts |
+| Drop `SEGMEN` values | `SEGMEN exclude` / `--exclude-segmen` | e.g. `KORPORASI` for Report Data Statis | Nothing is dropped |
+| Drop `SOURCE` values | `SOURCE exclude` / `--exclude-source` | `CMS` for Qlola, empty elsewhere | Nothing is dropped |
+
+Both `SEGMEN` filters are case-insensitive and trimmed, are AND-combined, and are
+a no-op when the extract has no `SEGMEN` column. Blank/null `SEGMEN` cells never
+match an exclusion, so they survive. Inclusion and exclusion stay separate
+fields — there is no single filter with a negation flag.
+
+So to include corporate accounts in a Report Data Statis run, clear the
+`SEGMEN exclude` field (or pass `--exclude-segmen ""`); leaving it untouched keeps
+dropping `KORPORASI` exactly as before. The Summary sheet's **Filter Applied**
+line always states the filters that run actually used.
+
+`KAWIL` is deliberately not an operator control: Report Data Statis always keeps
+only `KANWIL MALANG`.
 
 ### GUI (no arguments)
 
@@ -136,16 +224,26 @@ python main.py
 ```
 
 Launches a native Tkinter file-picker dialog — pick a **workflow** from the
-dropdown, select the raw file, (where required) a reference workbook, an optional
-filter, and an output path, then click **Run Pipeline**. The reference-file and
-master-data rows are shown only for the workflows that need them, and the
-**SOURCE filter** field is enabled only for workflows declaring
-`has_source_filter` (see [SOURCE filter config keys](#source-filter-config-keys)).
+dropdown, select the raw file, (where required) a reference workbook, adjust the
+filters, and choose an output path, then click **Run Pipeline**. The
+reference-file and master-data rows are shown only for the workflows that need
+them.
+
+The **SEGMEN keep only**, **SEGMEN exclude**, and **SOURCE exclude** fields are
+re-seeded with the selected workflow's defaults every time the dropdown changes,
+so switching workflows shows what that report filters out and can never carry
+another workflow's values over. They are live for every workflow — Report Giro
+included, where they apply to the monthly source and are simply a no-op when that
+extract has no `SEGMEN`/`SOURCE` column. Input button labels and file-type
+filters follow the selected workflow,
+so Report Giro offers Excel workbook pickers instead of the text/CSV ones.
 
 ## Input format
 
-All workflows read a pipe-delimited file with a header row. The required
-columns depend on the selected workflow:
+Every workflow except Report Giro reads a pipe-delimited file with a header row
+(Report Giro reads two Excel workbooks — see
+[Report Giro](#report-giro-master-balance-update)). The required columns depend
+on the selected workflow:
 
 **Akumulasi** (`raw_data.txt`):
 
@@ -171,6 +269,18 @@ Corporate|B01|Branch One|2000
 MAINBR|MBNAME|AMOUNT_IN_IDR
 B01|Branch One|1000
 B02|Branch Two|500
+```
+
+**Report Data Statis** (`KODE_UNIT`, `SEGMEN`, `KAWIL`, `ID_PRODUCT`; commonly a
+`.bin` extract, which is read as plain delimited text). `SEGMEN` = `KORPORASI`
+rows are dropped (blank `SEGMEN` kept), only `KAWIL` = `KANWIL MALANG` rows are
+kept, and the summary is the **Count** of non-blank `ID_PRODUCT` per branch:
+
+```
+KODE_UNIT|SEGMEN|KAWIL|ID_PRODUCT
+0001|Consumer|KANWIL MALANG|P1
+0001|KORPORASI|KANWIL MALANG|P2
+0002|Micro|KANWIL SURABAYA|P3
 ```
 
 The Akumulasi reference workbook (`reference.xlsx`) must contain a lookup key column plus a
@@ -226,9 +336,13 @@ that runs on a clean Windows machine without Python installed.
 │   ├── orchestrator.py   # Exception boundary + telemetry; dispatches to a workflow
 │   ├── workflows/        # Strategy pattern: WorkflowId, definitions, registry
 │   │   ├── base.py           # WorkflowId, WorkflowDefinition, WorkflowStrategy ABC
-│   │   ├── akumulasi.py      # Report Summary Akumulasi (enrichment-backed)
-│   │   ├── rincian_vol_tf.py # Rincian Vol TF (excludes Wholesale)
-│   │   ├── rincian_portal_bg.py  # Rincian Portal BG (no filter)
+│   │   ├── akumulasi.py      # 1. Report Summary Akumulasi (enrichment-backed)
+│   │   ├── timeseries_active_user_qlola.py  # 2. Qlola active-user crosstab
+│   │   ├── report_data_statis.py # 3. Report Data Statis (Count of ID_PRODUCT)
+│   │   ├── rincian_vol_tf.py # 4. Rincian Vol TF (excludes Wholesale)
+│   │   ├── rincian_portal_bg.py  # 5. Rincian Portal BG (no filter)
+│   │   ├── timeseries_fbi_briva.py  # 6. Briva NONWHOLESALE volume summary
+│   │   ├── report_giro.py    # 7. Report Giro (openpyxl master-balance update)
 │   │   └── registry.py       # WORKFLOW_REGISTRY + get_strategy()
 │   ├── cli.py            # Typer CLI (--workflow)
 │   ├── branding.py       # Product name

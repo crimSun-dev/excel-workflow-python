@@ -22,6 +22,17 @@ app = typer.Typer(
 )
 
 
+def _split_list(value: Optional[str]) -> Optional[list[str]]:
+    """Parses a comma-separated exclusion flag into a list, or None if omitted.
+
+    `None` (flag absent) means "use the workflow's default", while an empty
+    string means "exclude nothing" - the same contract as the GUI fields.
+    """
+    if value is None:
+        return None
+    return [token.strip() for token in value.split(",") if token.strip()]
+
+
 def _print_report(report) -> None:
     """Renders a PipelineReport to the terminal."""
     if report.success:
@@ -37,27 +48,37 @@ def _print_report(report) -> None:
 
 @app.command()
 def process(
-    raw_data: Path = typer.Option(..., "--raw", "-r", help="Path to raw_data.txt"),
+    raw_data: Path = typer.Option(
+        ...,
+        "--raw",
+        "-r",
+        help="Path to raw delimited data (.txt/.csv/.bin); for report-giro this "
+        "is the monthly giro source workbook (.xlsx)",
+    ),
     workflow: str = typer.Option(
         "akumulasi",
         "--workflow",
         "-w",
-        help="Workflow: akumulasi | rincian-vol-tf | rincian-portal-bg | "
-        "timeseries-fbi-briva | timeseries-active-user-qlola",
+        # Listed in the operator's daily sequence, matching the GUI dropdown
+        # and the valid-options listing below (both driven by WorkflowId order).
+        help="Workflow: akumulasi | timeseries-active-user-qlola | "
+        "report-data-statis | rincian-vol-tf | rincian-portal-bg | "
+        "timeseries-fbi-briva | report-giro",
     ),
     reference: Optional[Path] = typer.Option(
         None,
         "--ref",
         "-f",
         help="Path to reference.xlsx (required for akumulasi, timeseries-fbi-briva, "
-        "and timeseries-active-user-qlola)",
+        "timeseries-active-user-qlola, and report-data-statis)",
     ),
     master: Optional[Path] = typer.Option(
         None,
         "--master",
         "-m",
-        help="Path to master-data workbook mapping ID -> MAIN_CODE "
-        "(required only for timeseries-active-user-qlola)",
+        help="Path to the master workbook: ID -> MAIN_CODE for "
+        "timeseries-active-user-qlola, or the giro master to update for "
+        "report-giro (required for both)",
     ),
     output: Path = typer.Option(
         Path("./Financial_Summary_Report.xlsx"),
@@ -66,7 +87,23 @@ def process(
         help="Output file path",
     ),
     segment: Optional[str] = typer.Option(
-        None, "--segment", "-s", help="Filter by SEGMEN (e.g. Wholesale, Corporate)"
+        None,
+        "--segment",
+        "-s",
+        help="Keep only this SEGMEN (e.g. NONWHOLESALE). Omit to use the "
+        "workflow default; pass an empty string to keep every segment",
+    ),
+    exclude_segmen: Optional[str] = typer.Option(
+        None,
+        "--exclude-segmen",
+        help="Comma-separated SEGMEN values to drop (e.g. 'KORPORASI,Wholesale'). "
+        "Omit to use the workflow default; pass an empty string to drop none",
+    ),
+    exclude_source: Optional[str] = typer.Option(
+        None,
+        "--exclude-source",
+        help="Comma-separated SOURCE values to drop (e.g. 'CMS'). Omit to use "
+        "the workflow default; pass an empty string to drop none",
     ),
     delimiter: str = typer.Option("|", "--delimiter", "-d", help="Raw file delimiter"),
     interactive: bool = typer.Option(
@@ -105,9 +142,12 @@ def process(
         )
         raise typer.Exit(code=1)
     if definition.requires_master_data and master is None:
+        # What "master" means differs per workflow (Qlola's ID -> MAIN_CODE
+        # table vs the Giro master workbook), so the definition supplies the
+        # wording rather than the flag hardcoding one workflow's meaning.
         typer.secho(
-            f"\n[FAILED] The '{workflow_id}' workflow requires --master/-m "
-            "(a master-data file mapping ID -> MAIN_CODE).",
+            f"\n[FAILED] The '{workflow_id}' workflow requires --master/-m: "
+            f"{definition.master_picker_title}.",
             fg=typer.colors.RED,
             bold=True,
         )
@@ -120,6 +160,10 @@ def process(
         workflow_id=workflow_id,
         output_report_path=output,
         segmen_filter=segment,
+        # An omitted flag stays None so the workflow default applies; a supplied
+        # (even empty) value is the caller explicitly choosing what to drop.
+        segmen_exclude=_split_list(exclude_segmen),
+        source_exclude=_split_list(exclude_source),
         delimiter=delimiter,
     )
     report = PipelineOrchestrator.execute(config)

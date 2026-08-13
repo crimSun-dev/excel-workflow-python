@@ -17,21 +17,29 @@ from pydantic import BaseModel, Field, field_validator
 class ProcessingConfig(BaseModel):
     """Immutable runtime configuration passed to the orchestrator."""
 
-    raw_data_path: Path = Field(..., description="Path to raw pipe-delimited file")
+    raw_data_path: Path = Field(
+        ...,
+        description="Path to raw pipe-delimited file (.txt/.csv/.bin - a .bin "
+        "extract is plain delimited text). For Report Giro this is instead the "
+        "monthly giro source workbook (.xlsx/.xls/.xlsm/.csv)",
+    )
     reference_data_path: Optional[Path] = Field(
         default=None,
         description="Path to reference mapping Excel/CSV file "
-        "(required for Akumulasi, Time Series FBI Briva, and Qlola workflows)",
+        "(required for Akumulasi, Time Series FBI Briva, Qlola, and Report Data "
+        "Statis workflows)",
     )
     master_data_path: Optional[Path] = Field(
         default=None,
-        description="Path to master-data Excel/CSV file mapping ID -> MAIN_CODE "
-        "(required only for the Time Series Active User Qlola workflow)",
+        description="Path to the master workbook: an Excel/CSV file mapping "
+        "ID -> MAIN_CODE for Time Series Active User Qlola, or the giro master "
+        "workbook to update for Report Giro (required for both)",
     )
     workflow_id: str = Field(
         default="akumulasi",
         description="Selected workflow id (akumulasi | rincian-vol-tf | "
-        "rincian-portal-bg | timeseries-fbi-briva | timeseries-active-user-qlola)",
+        "rincian-portal-bg | timeseries-fbi-briva | timeseries-active-user-qlola "
+        "| report-data-statis | report-giro)",
     )
     output_report_path: Path = Field(
         default=Path("./Financial_Summary_Report.xlsx"),
@@ -40,7 +48,18 @@ class ProcessingConfig(BaseModel):
     delimiter: str = Field(default="|", description="Delimiter used in raw file")
     lookup_key: str = Field(default="KODE_UKER", description="Join key column name")
     segmen_filter: Optional[str] = Field(
-        default=None, description="Optional SEGMEN value to filter"
+        default=None,
+        description="Runtime override for the workflow's SEGMEN inclusion filter "
+        "(keep only this segment). None keeps the workflow definition's default "
+        "(e.g. 'NONWHOLESALE' for Briva); an empty string keeps every segment. "
+        "Ignored by workflows that do not declare supports_segment_filter",
+    )
+    segmen_exclude: Optional[list[str]] = Field(
+        default=None,
+        description="Runtime override for the workflow's SEGMEN exclusion list. "
+        "None keeps the workflow definition's default (e.g. ['KORPORASI'] for "
+        "Report Data Statis); an empty list disables SEGMEN exclusion entirely. "
+        "Ignored by workflows that do not declare supports_segment_filter",
     )
     source_exclude: Optional[list[str]] = Field(
         default=None,

@@ -9,17 +9,24 @@ from __future__ import annotations
 
 from .akumulasi import AkumulasiStrategy
 from .base import WorkflowDefinition, WorkflowId, WorkflowStrategy, WorkflowValidationError
+from .report_data_statis import ReportDataStatisStrategy
+from .report_giro import ReportGiroStrategy
 from .rincian_portal_bg import RincianPortalBgStrategy
 from .rincian_vol_tf import RincianVolTfStrategy
 from .timeseries_active_user_qlola import TimeSeriesActiveUserQlolaStrategy
 from .timeseries_fbi_briva import TimeSeriesFbiBrivaStrategy
 
+# Insertion order mirrors `WorkflowId` (the operator's daily sequence) so the
+# registry reads the same way the selector does. Dispatch is by key, so the
+# order is presentational only.
 WORKFLOW_REGISTRY: dict[WorkflowId, WorkflowStrategy] = {
     WorkflowId.AKUMULASI: AkumulasiStrategy(),
+    WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA: TimeSeriesActiveUserQlolaStrategy(),
+    WorkflowId.REPORT_DATA_STATIS: ReportDataStatisStrategy(),
     WorkflowId.RINCIAN_VOL_TF: RincianVolTfStrategy(),
     WorkflowId.RINCIAN_PORTAL_BG: RincianPortalBgStrategy(),
     WorkflowId.TIMESERIES_FBI_BRIVA: TimeSeriesFbiBrivaStrategy(),
-    WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA: TimeSeriesActiveUserQlolaStrategy(),
+    WorkflowId.REPORT_GIRO: ReportGiroStrategy(),
 }
 
 

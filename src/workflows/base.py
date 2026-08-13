@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
-from ..aggregation import AggregationEngine
+from ..aggregation import AggFunc, AggregationEngine
 from ..enrichment import LOOKUP_KEY_ALIASES, resolve_alias_column
 from ..exporter import PLAIN_INTEGER_FORMAT, ExcelReportExporter
 from ..ingestion import IngestionEngine
@@ -47,13 +47,23 @@ def normalize_join_key(data: pd.DataFrame, lookup_key: str) -> pd.DataFrame:
 
 
 class WorkflowId(str, Enum):
-    """Stable identifiers for the supported report workflows."""
+    """Stable identifiers for the supported report workflows.
+
+    Declaration order is the *display* contract: enums iterate in declaration
+    order, so this sequence drives the GUI dropdown and the CLI's valid-options
+    listing directly - there is no parallel ordering list to drift out of sync.
+    Members are therefore ordered by the operator's daily reporting sequence,
+    not by the order the workflows were added. The string values are the public
+    API (CLI flags, saved scripts) and never change when the order does.
+    """
 
     AKUMULASI = "akumulasi"
+    TIMESERIES_ACTIVE_USER_QLOLA = "timeseries-active-user-qlola"
+    REPORT_DATA_STATIS = "report-data-statis"
     RINCIAN_VOL_TF = "rincian-vol-tf"
     RINCIAN_PORTAL_BG = "rincian-portal-bg"
     TIMESERIES_FBI_BRIVA = "timeseries-fbi-briva"
-    TIMESERIES_ACTIVE_USER_QLOLA = "timeseries-active-user-qlola"
+    REPORT_GIRO = "report-giro"
 
 
 class WorkflowValidationError(Exception):
@@ -75,12 +85,28 @@ class WorkflowDefinition:
     numeric_rounding: Literal["round", "ceil"] = "round"
     numeric_columns: tuple[str, ...] = ()
     required_columns: tuple[str, ...] = ()
+    # Default SEGMEN values to drop (e.g. Report Data Statis drops KORPORASI).
+    # A runtime `ProcessingConfig.segmen_exclude` overrides this default.
     exclude_segmen: tuple[str, ...] = ()
+    # Whether this workflow exposes the SEGMEN controls (both the keep-only and
+    # the exclude field). True for every workflow that can honor them - including
+    # Report Giro, which applies them to its monthly source. False greys the
+    # fields out, so a disabled field always means "this value would be ignored".
     supports_segment_filter: bool = False
-    # Definition-baked SEGMEN inclusion filter (e.g. Briva keeps only NONWHOLESALE).
-    # Applied ahead of the optional runtime `segmen_filter`; distinct from the
-    # `exclude_segmen` exclusion list so inclusion vs exclusion never share a flag.
+    # Default SEGMEN inclusion filter (e.g. Briva keeps only NONWHOLESALE).
+    # Seeds the GUI's keep-only field and applies when the operator leaves it
+    # untouched; distinct from the `exclude_segmen` exclusion list so inclusion
+    # vs exclusion never share a flag.
     segmen_include: str | None = None
+    # Definition-baked KAWIL (regional office) inclusion filter, e.g. Report Data
+    # Statis keeps only "KANWIL MALANG". Deliberately separate from the SEGMEN
+    # fields above so region and segment filtering never share a flag; the two
+    # are AND-combined by the aggregator.
+    kawil_include: str | None = None
+    # How the value columns are aggregated: "sum" totals them (all money
+    # workflows), "count" reproduces Excel's Count of non-blank cells (Report
+    # Data Statis counts ID_PRODUCT, which is textual and must never be summed).
+    aggfunc: AggFunc = "sum"
     # Dedicated SOURCE exclusion list (e.g. Qlola drops CMS). Kept separate from
     # SEGMEN filtering so the two column filters never collide. Empty (the
     # default) means no SOURCE filtering at all; a runtime `ProcessingConfig.
@@ -97,6 +123,20 @@ class WorkflowDefinition:
     value_cols: tuple[str, ...] = ()
     # Internal column -> report header overrides, e.g. ("FBI", "Sum of FBI").
     value_display_names: tuple[tuple[str, str], ...] = ()
+    # ---- File-picker metadata (GUI) ----------------------------------------
+    # Most workflows read a pipe-delimited text extract, but Report Giro's raw
+    # input is a monthly Excel workbook, so the button text, dialog title, and
+    # extension filter are declarative rather than hardcoded in the GUI.
+    raw_button_label: str = "1. Raw Data File..."
+    raw_picker_title: str = "Select raw pipe-delimited data file"
+    raw_filetypes: tuple[tuple[str, str], ...] = (
+        # `.bin` raw extracts (Report Data Statis) are plain delimited text
+        # despite the extension, so they belong in the same filter.
+        ("Text/CSV/BIN", "*.txt *.csv *.bin"),
+        ("All files", "*.*"),
+    )
+    master_button_label: str = "2b. Master Data File..."
+    master_picker_title: str = "Select master-data workbook (ID -> MAIN_CODE)"
 
     @property
     def resolved_value_cols(self) -> tuple[str, ...]:
@@ -151,27 +191,30 @@ class WorkflowStrategy(ABC):
         # 2. Validate that mandatory input columns are present up front.
         self._validate_columns(data)
 
-        # 3. Optional reference enrichment (Akumulasi only).
+        # 3. Drop the excluded SOURCE values before enrichment, so a row that is
+        # filtered out never costs a lookup and never reaches the detail sheet.
+        data = self.apply_source_exclude(data, self.resolve_source_exclude(config))
+
+        # 4. Optional reference enrichment (Akumulasi only).
         data, unmapped_count = self._enrich(config, data)
 
-        # 4. Aggregate (group + sum, with inclusion/exclusion SEGMEN handling).
-        # A definition-baked inclusion (e.g. Briva NONWHOLESALE) takes precedence
-        # over the optional runtime SEGMEN filter.
-        segment_filter = definition.segmen_include or (
-            config.segmen_filter if definition.supports_segment_filter else None
-        )
+        # 5. Aggregate (group + sum, with inclusion/exclusion SEGMEN handling).
+        # Both SEGMEN filters resolve to the operator's runtime choice when one
+        # was supplied, and to the workflow's baked default otherwise.
         aggregator = AggregationEngine(
-            segment_filter=segment_filter,
-            exclude_segmen=list(definition.exclude_segmen) or None,
+            segment_filter=self.resolve_segment_filter(config),
+            exclude_segmen=self.resolve_segmen_exclude(config),
+            kawil_include=definition.kawil_include,
         )
         aggregated = aggregator.aggregate(
             data,
             group_cols=list(definition.group_cols),
             value_col=definition.value_col,
             value_cols=list(definition.resolved_value_cols),
+            aggfunc=definition.aggfunc,
         )
 
-        # 5. Export the parameterized styled workbook.
+        # 6. Export the parameterized styled workbook.
         exporter = ExcelReportExporter(
             number_format=definition.number_format,
             numeric_rounding=definition.numeric_rounding,
@@ -180,6 +223,9 @@ class WorkflowStrategy(ABC):
             display_names=definition.display_name_map,
             report_title=definition.report_title,
             detail_sheet_name=definition.detail_sheet_name,
+            # Under "count" the value column is textual on the detail sheet, so
+            # only the summary's integer counts get numeric formatting.
+            format_detail_values=definition.aggfunc != "count",
         )
         output_path = exporter.export(
             summary_df=aggregated.summary_data,
@@ -202,6 +248,32 @@ class WorkflowStrategy(ABC):
     ) -> tuple[pd.DataFrame, int]:
         """Default: no enrichment. Returns the data untouched, 0 unmapped."""
         return data, 0
+
+    def resolve_segment_filter(self, config: "ProcessingConfig") -> str | None:
+        """Effective SEGMEN "keep only" value: runtime choice beats the default.
+
+        Returns `None` when no inclusion filter applies. An operator who clears
+        the field is asking for every segment, which is a deliberate instruction
+        rather than a request to fall back to the workflow default. Workflows
+        that do not declare `supports_segment_filter` always keep their baked
+        default, so a stale value can never leak into them.
+        """
+        definition = self.definition
+        if definition.supports_segment_filter and config.segmen_filter is not None:
+            return config.segmen_filter.strip() or None
+        return definition.segmen_include
+
+    def resolve_segmen_exclude(self, config: "ProcessingConfig") -> list[str]:
+        """Effective SEGMEN exclusion list: runtime choice beats the default.
+
+        An empty list explicitly means "exclude nothing" - that is how the
+        operator re-includes segments the workflow drops by default (e.g. keeping
+        KORPORASI in a Report Data Statis run).
+        """
+        definition = self.definition
+        if definition.supports_segment_filter and config.segmen_exclude is not None:
+            return [s.strip() for s in config.segmen_exclude if s.strip()]
+        return list(definition.exclude_segmen)
 
     def resolve_source_exclude(self, config: "ProcessingConfig") -> list[str]:
         """Effective SOURCE exclusion list: runtime override beats the definition.
@@ -231,13 +303,26 @@ class WorkflowStrategy(ABC):
         return data[~source.isin(excluded)]
 
     def _filter_label(self, config: "ProcessingConfig") -> str | None:
-        """Human-readable filter description for the report metadata block."""
-        definition = self.definition
-        if definition.exclude_segmen:
-            return f"{', '.join(definition.exclude_segmen)} (excluded)"
-        if definition.supports_segment_filter and config.segmen_filter:
-            return config.segmen_filter
-        return None
+        """Human-readable description of the filters this run actually applied.
+
+        Built from the resolved values rather than the definition, so a report
+        produced with operator-edited filters states what was really excluded.
+        """
+        parts: list[str] = []
+        include = self.resolve_segment_filter(config)
+        if include:
+            parts.append(f"{include} (only)")
+        segmen_exclude = self.resolve_segmen_exclude(config)
+        if segmen_exclude:
+            parts.append(f"{', '.join(segmen_exclude)} (excluded)")
+        # KAWIL and SOURCE are reported alongside the SEGMEN rules so the
+        # metadata block never understates what was filtered out.
+        if self.definition.kawil_include:
+            parts.append(f"KAWIL {self.definition.kawil_include} (only)")
+        source_exclude = self.resolve_source_exclude(config)
+        if source_exclude:
+            parts.append(f"{', '.join(source_exclude)} (SOURCE excluded)")
+        return "; ".join(parts) or None
 
     def _validate_columns(self, data: pd.DataFrame) -> None:
         """Raises WorkflowValidationError listing any missing input columns."""
