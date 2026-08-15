@@ -23,6 +23,7 @@ RINCIAN_PORTAL_BG_DEFINITION = WorkflowDefinition(
     required_columns=("MAINBR", "MBNAME", "AMOUNT_IN_IDR"),
     supports_segment_filter=True,
     has_source_filter=True,
+    has_kw_filter=True,
 )
 
 

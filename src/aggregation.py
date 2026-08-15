@@ -1,22 +1,39 @@
 """Aggregation Engine (TDD Section 3.4).
 
-Replicates Excel's PivotTable: optionally filters by SEGMEN and KAWIL, groups by
-[MAIN_CODE, MAIN_BRANCH], and sums (or counts) the value column. Subtotals are
-intentionally suppressed (matching the tabular-form, no-subtotal layout in the
-source workflow); only a single Grand Total is computed separately by the
-exporter.
+Replicates Excel's PivotTable: optionally filters by SEGMEN, KW and KAWIL,
+groups by [MAIN_CODE, MAIN_BRANCH], and sums (or counts) the value column.
+Subtotals are intentionally suppressed (matching the tabular-form, no-subtotal
+layout in the source workflow); only a single Grand Total is computed separately
+by the exporter.
+
+Every operator-facing dimension (SEGMENT, SOURCE, KW) runs through the one
+`apply_column_filters` helper, so "keep only these" and "drop these" behave
+identically everywhere and a dimension whose column is absent is always a
+silent no-op rather than an error.
 """
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from collections.abc import Sequence
+from typing import Literal, Optional, Union
 
 import pandas as pd
 
+from .enrichment import resolve_alias_column
 from .schemas import AggregationResult
 
 SEGMEN_COLUMN = "SEGMEN"
 KAWIL_COLUMN = "KAWIL"
+SOURCE_COLUMN = "SOURCE"
+
+# KW is the stakeholder's label for the product/regional dimension; the physical
+# header differs per extract, so the control resolves the first alias present
+# (and stays a no-op when the source carries none of them).
+KW_COLUMN_ALIASES = ["KW", "PRODUCT", "GROUP_PRODUCT", "KAWIL"]
+
+# One value, a list of values, or nothing at all - the GUI hands over a
+# keep-list while the CLI and older callers may pass a single string.
+FilterValues = Union[str, Sequence[str], None]
 
 AggFunc = Literal["sum", "count"]
 
@@ -30,35 +47,72 @@ def _non_blank_mask(series: pd.Series) -> pd.Series:
     return series.notna() & (series.astype(str).str.strip() != "")
 
 
-def apply_segmen_filters(
-    df: pd.DataFrame,
-    include: Optional[str] = None,
-    exclude: Optional[list[str]] = None,
-) -> pd.DataFrame:
-    """Keeps only `include` and drops `exclude`, mirroring the Pivot Filters pane.
+def normalize_filter_values(values: FilterValues) -> set[str]:
+    """Trimmed, case-folded comparison set; blanks drop out.
 
-    Both filters are case-insensitive, trimmed, and AND-combined. Shared by the
-    aggregation engine and by workflows that build their own summary (Qlola), so
-    "keep only X" and "drop Y" behave identically everywhere.
-
-    An empty or whitespace-only `include` means "all segments" - that is how an
-    operator clearing the field asks for no inclusion filter. Blank/null SEGMEN
-    cells never match an exclusion, so they are retained. A missing SEGMEN
-    column makes both filters a no-op.
+    `None`, `""`, `[]` and `["", "  "]` all collapse to an empty set, which every
+    caller reads as "no filtering on this dimension".
     """
-    if SEGMEN_COLUMN not in df.columns:
+    if values is None:
+        return set()
+    if isinstance(values, str):
+        values = [values]
+    return {str(v).strip().casefold() for v in values if str(v).strip()}
+
+
+def apply_column_filters(
+    df: pd.DataFrame,
+    aliases: list[str],
+    include: FilterValues = None,
+    exclude: FilterValues = None,
+) -> pd.DataFrame:
+    """Keeps only `include` and drops `exclude` on the first alias column present.
+
+    Both filters are case-insensitive, trimmed, and AND-combined. An empty
+    `include` means "keep everything"; blank/null cells never match an exclusion
+    so they are retained, while an inclusion filter drops them (a blank cell is
+    not one of the values the operator asked to keep). A source that has none of
+    the alias columns makes both filters a no-op.
+    """
+    included = normalize_filter_values(include)
+    excluded = normalize_filter_values(exclude)
+    if not included and not excluded:
         return df
 
-    if include is not None and include.strip():
-        segmen = df[SEGMEN_COLUMN].astype(str).str.strip().str.casefold()
-        df = df[segmen == include.strip().casefold()]
+    column = resolve_alias_column(df, aliases)
+    if column is None:
+        return df
 
-    excluded = {s.strip().casefold() for s in (exclude or []) if s.strip()}
+    if included:
+        values = df[column].astype(str).str.strip().str.casefold()
+        df = df[values.isin(included)]
     if excluded:
-        segmen = df[SEGMEN_COLUMN].astype(str).str.strip().str.casefold()
-        df = df[~segmen.isin(excluded)]
-
+        values = df[column].astype(str).str.strip().str.casefold()
+        df = df[~values.isin(excluded)]
     return df
+
+
+def apply_segmen_filters(
+    df: pd.DataFrame,
+    include: FilterValues = None,
+    exclude: FilterValues = None,
+) -> pd.DataFrame:
+    """SEGMEN keep-list / drop-list, shared by the engine and Qlola / Giro."""
+    return apply_column_filters(df, [SEGMEN_COLUMN], include, exclude)
+
+
+def apply_source_filters(
+    df: pd.DataFrame,
+    include: FilterValues = None,
+    exclude: FilterValues = None,
+) -> pd.DataFrame:
+    """SOURCE keep-list / drop-list (e.g. Qlola's default CMS exclusion)."""
+    return apply_column_filters(df, [SOURCE_COLUMN], include, exclude)
+
+
+def apply_kw_filters(df: pd.DataFrame, include: FilterValues = None) -> pd.DataFrame:
+    """KW keep-list, resolved against `KW_COLUMN_ALIASES` (no-op when absent)."""
+    return apply_column_filters(df, KW_COLUMN_ALIASES, include)
 
 
 class AggregationEngine:
@@ -66,9 +120,10 @@ class AggregationEngine:
 
     def __init__(
         self,
-        segment_filter: Optional[str] = None,
+        segment_filter: FilterValues = None,
         exclude_segmen: Optional[list[str]] = None,
         kawil_include: Optional[str] = None,
+        kw_include: FilterValues = None,
     ):
         self.segment_filter = segment_filter
         # SEGMEN values to drop before grouping (e.g. Rincian Vol TF excludes
@@ -79,6 +134,10 @@ class AggregationEngine:
         # filters so the two column dimensions can never be conflated; it is
         # AND-combined with them.
         self.kawil_include = kawil_include
+        # Operator-facing KW keep-list, resolved by header alias and AND-combined
+        # with the filters above. Its own knob for the same reason as KAWIL:
+        # dimensions never share a flag.
+        self.kw_include = kw_include
 
     def aggregate(
         self,
@@ -125,9 +184,12 @@ class AggregationEngine:
         # Apply the optional KAWIL inclusion filter (case-insensitive, trimmed).
         # Blank/null KAWIL never matches, so those rows are dropped - the
         # opposite of the SEGMEN exclusion above, which retains them.
-        if self.kawil_include is not None and KAWIL_COLUMN in df.columns:
-            kawil = df[KAWIL_COLUMN].astype(str).str.strip().str.casefold()
-            df = df[kawil == self.kawil_include.strip().casefold()]
+        df = apply_column_filters(df, [KAWIL_COLUMN], self.kawil_include)
+
+        # Apply the operator's KW keep-list. Resolved by alias and skipped
+        # entirely when the source carries no KW-like column, so a filter typed
+        # against an extract that has no such dimension can never fail a run.
+        df = apply_kw_filters(df, self.kw_include)
 
         missing = [c for c in value_cols if c not in df.columns]
         if missing:

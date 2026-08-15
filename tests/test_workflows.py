@@ -18,11 +18,14 @@ from src.enrichment import (
     warn_if_mostly_unmapped,
 )
 from src.gui import (
+    default_kw_text,
     default_segmen_exclude_text,
     default_segmen_include_text,
     default_source_text,
+    filter_hint_text,
+    kw_filter_enabled,
     master_picker_config,
-    parse_exclude_list,
+    parse_filter_input,
     raw_picker_config,
     segment_filter_enabled,
     source_filter_enabled,
@@ -814,13 +817,15 @@ def test_giro_exposes_segmen_and_source_filters_like_the_others():
     """Giro applies them to its monthly source, so the fields must be live."""
     assert segment_filter_enabled("report-giro") is True
     assert source_filter_enabled("report-giro") is True
+    assert kw_filter_enabled("report-giro") is True
 
 
-def test_segment_filter_enabled_for_every_workflow():
-    """Operators choose the segments per run, on every report without exception."""
+def test_every_filter_dimension_is_enabled_for_every_workflow():
+    """The unified FILTERS block is live on every report, without exception."""
     for workflow_id in WorkflowId:
         assert segment_filter_enabled(workflow_id) is True
         assert source_filter_enabled(workflow_id) is True
+        assert kw_filter_enabled(workflow_id) is True
 
 
 def test_giro_cli_rejects_a_missing_master_path(giro_monthly_file, tmp_path):
@@ -1896,17 +1901,52 @@ def test_gui_source_field_default_text():
     assert default_source_text(WorkflowId.AKUMULASI) == ""
 
 
-def test_gui_segmen_fields_are_seeded_with_the_workflow_defaults():
-    """The operator must be able to see (and edit) what a report drops by default."""
+def test_gui_workflow_defaults_back_the_filter_hints():
+    """The boxes ship empty, so the hint is what keeps the baked rule visible."""
     assert default_segmen_exclude_text("report-data-statis") == "KORPORASI"
     assert default_segmen_exclude_text("rincian-vol-tf") == "Wholesale"
     assert default_segmen_include_text("timeseries-fbi-briva") == "NONWHOLESALE"
     # No default rule, but the field is still live.
     assert default_segmen_include_text("akumulasi") == ""
     assert default_segmen_exclude_text("akumulasi") == ""
-    # Report Giro's fields are live but seeded empty - it drops nothing by default.
+    # Report Giro's fields are live - it just drops nothing by default.
     assert default_segmen_exclude_text("report-giro") == ""
     assert default_segmen_include_text("report-giro") == ""
+    # No workflow bakes in a KW keep-list yet; the dimension is operator-only.
+    for workflow_id in WorkflowId:
+        assert default_kw_text(workflow_id) == ""
+
+
+@pytest.mark.parametrize(
+    ("workflow_id", "dimension", "expected"),
+    [
+        ("report-data-statis", "SEGMENT", "auto: drops KORPORASI"),
+        ("timeseries-fbi-briva", "SEGMENT", "auto: keeps NONWHOLESALE"),
+        ("timeseries-active-user-qlola", "SOURCE", "auto: drops CMS"),
+        ("akumulasi", "SEGMENT", "auto: keeps everything"),
+        ("report-giro", "KW", "auto: keeps everything"),
+    ],
+)
+def test_gui_filter_hint_states_what_an_empty_box_does(
+    workflow_id, dimension, expected
+):
+    assert filter_hint_text(workflow_id, dimension) == expected
+
+
+def test_gui_filter_hint_marks_a_dimension_the_report_ignores(monkeypatch):
+    """A greyed-out box must say why, not just sit there blank."""
+    import src.gui as gui
+
+    monkeypatch.setattr(gui, "get_definition", lambda _: _FLAGLESS_DEFINITION)
+    for dimension in ("SEGMENT", "SOURCE", "KW"):
+        assert gui.filter_hint_text("report-giro", dimension) == (
+            "not used by this report"
+        )
+
+
+def test_gui_filter_hint_rejects_an_unknown_dimension():
+    with pytest.raises(ValueError):
+        filter_hint_text("akumulasi", "KAWIL")
 
 
 @pytest.mark.parametrize(
@@ -1915,50 +1955,59 @@ def test_gui_segmen_fields_are_seeded_with_the_workflow_defaults():
         ("CMS", ["CMS"]),
         ("CMS,MOBILE", ["CMS", "MOBILE"]),
         ("  CMS , MOBILE  ", ["CMS", "MOBILE"]),
-        ("", []),
-        ("   ", []),
         ("CMS,,MOBILE", ["CMS", "MOBILE"]),
+        # An empty box is "run the report's automatic rules", not "filter nothing",
+        # so it must reach the workflow as None rather than an empty list.
+        ("", None),
+        ("   ", None),
+        (",  ,", None),
     ],
 )
-def test_gui_parse_exclude_list(text, expected):
-    assert parse_exclude_list(text) == expected
+def test_gui_parse_filter_input(text, expected):
+    assert parse_filter_input(text) == expected
 
 
 def test_gui_edited_source_field_reaches_the_workflow(
     qlola_raw_file, qlola_uker_reference_file, qlola_master_file, tmp_path
 ):
-    """The parsed field value is what the strategy actually filters on."""
+    """A typed SOURCE box becomes a keep-list and drops the baked CMS exclusion."""
     strategy = get_strategy(WorkflowId.TIMESERIES_ACTIVE_USER_QLOLA)
+    typed = parse_filter_input("CMS, MOBILE")
     config = ProcessingConfig(
         raw_data_path=qlola_raw_file,
         reference_data_path=qlola_uker_reference_file,
         master_data_path=qlola_master_file,
         workflow_id="timeseries-active-user-qlola",
         output_report_path=tmp_path / "unused.xlsx",
-        source_exclude=parse_exclude_list("CMS, MOBILE"),
+        source_include=typed,
+        source_exclude=None if typed is None else [],
     )
-    assert strategy.resolve_source_exclude(config) == ["CMS", "MOBILE"]
+    assert strategy.resolve_source_include(config) == ["CMS", "MOBILE"]
+    assert strategy.resolve_source_exclude(config) == []
+
+
+_FLAGLESS_DEFINITION = WorkflowDefinition(
+    workflow_id=WorkflowId.REPORT_GIRO,
+    label="Flagless",
+    requires_reference=False,
+    group_cols=(),
+    value_col="VALUE",
+    report_title="Flagless",
+    detail_sheet_name="",
+)
 
 
 class _FlaglessStrategy(WorkflowStrategy):
-    """Declares neither filter flag, exercising the base-class opt-in guard.
+    """Declares no filter flag at all, exercising the base-class opt-in guard.
 
-    Every shipped workflow now exposes both filters, so the guard that stops a
-    stale GUI/CLI value from leaking into a workflow that never opted in is
+    Every shipped workflow now exposes all three filters, so the guard that stops
+    a stale GUI/CLI value from leaking into a workflow that never opted in is
     covered by a stub rather than pinned to whichever report happens to opt out.
     """
 
     @property
     def definition(self) -> WorkflowDefinition:
-        return WorkflowDefinition(
-            workflow_id=WorkflowId.REPORT_GIRO,
-            label="Flagless",
-            requires_reference=False,
-            group_cols=(),
-            value_col="VALUE",
-            report_title="Flagless",
-            detail_sheet_name="",
-        )
+        return _FLAGLESS_DEFINITION
 
 
 def _flagless_config(tmp_path, **overrides) -> ProcessingConfig:
@@ -2464,3 +2513,274 @@ def test_qlola_jul24_live_acceptance_oracle(tmp_path):
     assert grand_total["AKTIF TRX >=5x"] == 3039
     assert grand_total["TIDAK AKTIF <5x"] == 1626
     assert grand_total["Grand Total"] == 4665
+
+
+# --------------------------------------------------------------------------- #
+# Unified FILTERS block: empty = automatic, written = keep-list override
+#
+# `_gui_filters` reproduces exactly what `launch_gui`'s run() builds from the
+# three FILTERS boxes, so these exercise the operator's real contract rather
+# than a hand-written config that only resembles it.
+# --------------------------------------------------------------------------- #
+def _gui_filters(segment: str = "", source: str = "", kw: str = "") -> dict:
+    """Config kwargs for the given SEGMENT / SOURCE / KW box contents."""
+    seg = parse_filter_input(segment)
+    src = parse_filter_input(source)
+    return {
+        "segmen_filter": seg,
+        # A typed keep-list replaces that dimension's default policy for the run.
+        "segmen_exclude": None if seg is None else [],
+        "source_include": src,
+        "source_exclude": None if src is None else [],
+        "kw_include": parse_filter_input(kw),
+    }
+
+
+def test_empty_boxes_send_none_to_the_workflow():
+    """The whole revamp rests on this: empty must not mean "filter nothing"."""
+    assert _gui_filters() == {
+        "segmen_filter": None,
+        "segmen_exclude": None,
+        "source_include": None,
+        "source_exclude": None,
+        "kw_include": None,
+    }
+
+
+def test_empty_segment_box_still_drops_korporasi(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    """Data Statis' baked KORPORASI exclusion is what an empty box runs."""
+    out = tmp_path / "statis_empty_boxes.xlsx"
+    report = PipelineOrchestrator.execute(
+        _statis_config(report_data_statis_bin_file, reference_file, out, **_gui_filters())
+    )
+    assert report.success is True, report.error_message
+
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # P4/P5 (KORPORASI) stay out, exactly as with no filter arguments at all.
+    assert rows[("MC10", "Jakarta Pusat")].value == 3
+
+
+def test_empty_source_box_still_drops_cms(
+    qlola_raw_file, qlola_uker_reference_file, qlola_master_file, tmp_path
+):
+    """Qlola's baked CMS exclusion is what an empty box runs."""
+    out = tmp_path / "qlola_empty_boxes.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=qlola_raw_file,
+        reference_data_path=qlola_uker_reference_file,
+        master_data_path=qlola_master_file,
+        workflow_id="timeseries-active-user-qlola",
+        output_report_path=out,
+        **_gui_filters(),
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is True, report.error_message
+
+    _, rows, grand_total = _read_crosstab_table(load_workbook(out)["Summary_Report"])
+    # Identical to the untouched-default run: U6 (CMS-only) never counts.
+    assert grand_total["Grand Total"] == 4
+    assert rows["9"]["AKTIF TRX >=5x"] == 1
+
+
+def test_empty_segment_box_still_keeps_only_nonwholesale(tmp_path):
+    """Briva's default is an *inclusion*, and an empty box must run it too."""
+    strategy = get_strategy(WorkflowId.TIMESERIES_FBI_BRIVA)
+    config = ProcessingConfig(
+        raw_data_path=tmp_path / "raw.csv",
+        workflow_id="timeseries-fbi-briva",
+        output_report_path=tmp_path / "out.xlsx",
+        **_gui_filters(),
+    )
+    assert strategy.resolve_segment_filter(config) == "NONWHOLESALE"
+
+
+def test_written_segment_box_replaces_the_baked_exclusion(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    """Typing the segment the report drops by default must keep only that one."""
+    out = tmp_path / "statis_korporasi_only.xlsx"
+    report = PipelineOrchestrator.execute(
+        _statis_config(
+            report_data_statis_bin_file,
+            reference_file,
+            out,
+            **_gui_filters(segment="KORPORASI"),
+        )
+    )
+    assert report.success is True, report.error_message
+
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # P4 + P5: the default KORPORASI exclusion was replaced, not AND-ed.
+    assert rows[("MC10", "Jakarta Pusat")].value == 2
+
+
+def test_written_segment_box_accepts_a_comma_separated_keep_list(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    out = tmp_path / "statis_two_segments.xlsx"
+    report = PipelineOrchestrator.execute(
+        _statis_config(
+            report_data_statis_bin_file,
+            reference_file,
+            out,
+            **_gui_filters(segment="Consumer, KORPORASI"),
+        )
+    )
+    assert report.success is True, report.error_message
+
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # P1 (Consumer) + P4 + P5 (KORPORASI); the Micro/SME/blank rows drop out.
+    assert rows[("MC10", "Jakarta Pusat")].value == 3
+
+
+def test_written_source_box_replaces_the_qlola_cms_exclusion(
+    qlola_raw_file, qlola_uker_reference_file, qlola_master_file, tmp_path
+):
+    """Typing CMS keeps only CMS - the exact inverse of the baked default."""
+    out = tmp_path / "qlola_cms_only.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=qlola_raw_file,
+        reference_data_path=qlola_uker_reference_file,
+        master_data_path=qlola_master_file,
+        workflow_id="timeseries-active-user-qlola",
+        output_report_path=out,
+        **_gui_filters(source="CMS"),
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is True, report.error_message
+
+    _, rows, grand_total = _read_crosstab_table(load_workbook(out)["Summary_Report"])
+    # Only U1's CMS row (master 7) and U6 (master 9) survive, both active.
+    assert grand_total["Grand Total"] == 2
+    assert rows["7"]["AKTIF TRX >=5x"] == 1
+    assert rows["9"]["AKTIF TRX >=5x"] == 1
+
+
+def test_typed_filters_are_a_no_op_on_an_extract_without_those_columns(
+    rincian_portal_bg_file, tmp_path
+):
+    """MAINBR/MBNAME/AMOUNT only: all three filters must pass every row through."""
+    out = tmp_path / "portal_bg_all_filters.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=rincian_portal_bg_file,
+        workflow_id="rincian-portal-bg",
+        output_report_path=out,
+        **_gui_filters(segment="Consumer", source="CMS", kw="KW01"),
+    )
+    report = PipelineOrchestrator.execute(config)
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["Summary_Report"]
+    rows = {
+        (r[0].value, r[1].value): r[2].value
+        for r in ws.iter_rows()
+        if r[0].value in {"B01", "B02"}
+    }
+    assert rows[("B01", "Branch One")] == 3000
+    assert rows[("B02", "Branch Two")] == 500
+
+
+def test_giro_typed_filters_are_a_no_op_without_those_columns(
+    giro_monthly_file, giro_master_file, tmp_path
+):
+    """Report Giro spec: a typed filter cannot fail a NO REK + SALDO IDR run."""
+    out = tmp_path / "giro_all_filters_noop.xlsx"
+    report = _run_giro(
+        giro_monthly_file,
+        giro_master_file,
+        out,
+        **_gui_filters(segment="RITEL", source="BRANCH", kw="KW01"),
+    )
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_UPDATE_COL).value == 2500
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+
+
+def test_giro_typed_segment_box_keeps_only_that_segment(
+    giro_monthly_file_with_segmen, giro_master_file, tmp_path
+):
+    """Where the monthly source does carry SEGMEN, the box must really filter."""
+    out = tmp_path / "giro_gui_segment.xlsx"
+    report = _run_giro(
+        giro_monthly_file_with_segmen,
+        giro_master_file,
+        out,
+        **_gui_filters(segment="RITEL"),
+    )
+    assert report.success is True, report.error_message
+
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(GIRO_ROW_MATCHED, GIRO_SALDO_UPDATE_COL).value is None  # KORPORASI
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+
+
+# --------------------------------------------------------------------------- #
+# KW dimension (AggregationEngine)
+# --------------------------------------------------------------------------- #
+def _kw_frame(**columns) -> pd.DataFrame:
+    base = {
+        "MAIN_CODE": ["A", "B"],
+        "MAIN_BRANCH": ["Branch A", "Branch B"],
+        "VOLUME_IN_IDR": [100.0, 200.0],
+    }
+    base.update(columns)
+    return pd.DataFrame(base)
+
+
+def test_kw_filter_keeps_only_the_requested_kw():
+    result = AggregationEngine(kw_include=["KW01"]).aggregate(
+        _kw_frame(KW=["KW01", "KW02"])
+    )
+    assert result.total_volume_idr == 100.0
+    assert result.branch_count == 1
+
+
+def test_kw_filter_accepts_a_multi_value_keep_list():
+    result = AggregationEngine(kw_include=["KW01", "kw02"]).aggregate(
+        _kw_frame(KW=["KW01", "KW02"])
+    )
+    assert result.total_volume_idr == 300.0
+
+
+@pytest.mark.parametrize("header", ["KW", "PRODUCT", "GROUP_PRODUCT", "KAWIL"])
+def test_kw_filter_resolves_each_header_alias(header):
+    """The stakeholder's KW may be spelled several ways in the extract."""
+    result = AggregationEngine(kw_include=["KW01"]).aggregate(
+        _kw_frame(**{header: ["KW01", "KW02"]})
+    )
+    assert result.total_volume_idr == 100.0
+
+
+def test_kw_filter_is_a_no_op_without_a_kw_column():
+    """Missing-column pass-through: every row survives and nothing raises."""
+    result = AggregationEngine(kw_include=["KW01"]).aggregate(_kw_frame())
+    assert result.total_volume_idr == 300.0
+    assert result.branch_count == 2
+
+
+def test_empty_kw_keep_list_keeps_every_row():
+    result = AggregationEngine(kw_include=[]).aggregate(_kw_frame(KW=["KW01", "KW02"]))
+    assert result.total_volume_idr == 300.0
+
+
+def test_all_filter_dimensions_are_a_no_op_on_a_bare_frame():
+    """SEGMENT + SOURCE + KW typed against a frame that has none of them."""
+    engine = AggregationEngine(
+        segment_filter=["Consumer"],
+        exclude_segmen=["KORPORASI"],
+        kw_include=["KW01"],
+    )
+    result = engine.aggregate(_kw_frame())
+    assert result.total_volume_idr == 300.0
+    assert result.branch_count == 2
+
+
+def test_kw_override_is_gated_by_the_workflow_flag(tmp_path):
+    """`has_kw_filter` gates the runtime override exactly like the other flags."""
+    config = _flagless_config(tmp_path, kw_include=["KW01"])
+    assert get_strategy(WorkflowId.REPORT_GIRO).resolve_kw_include(config) == ["KW01"]
+    assert _FlaglessStrategy().resolve_kw_include(config) == []

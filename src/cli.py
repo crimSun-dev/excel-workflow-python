@@ -90,8 +90,8 @@ def process(
         None,
         "--segment",
         "-s",
-        help="Keep only this SEGMEN (e.g. NONWHOLESALE). Omit to use the "
-        "workflow default; pass an empty string to keep every segment",
+        help="Comma-separated SEGMEN keep-list (e.g. NONWHOLESALE). Omit to use "
+        "the workflow default; pass an empty string to keep every segment",
     ),
     exclude_segmen: Optional[str] = typer.Option(
         None,
@@ -104,6 +104,19 @@ def process(
         "--exclude-source",
         help="Comma-separated SOURCE values to drop (e.g. 'CMS'). Omit to use "
         "the workflow default; pass an empty string to drop none",
+    ),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        help="Comma-separated SOURCE keep-list (keep only these). Omit for no "
+        "inclusion filter, leaving the workflow's SOURCE default in charge",
+    ),
+    kw: Optional[str] = typer.Option(
+        None,
+        "--kw",
+        help="Comma-separated KW keep-list (keep only these). Omit to use the "
+        "workflow default; pass an empty string to keep every KW. A no-op when "
+        "the source has no KW/PRODUCT/GROUP_PRODUCT/KAWIL column",
     ),
     delimiter: str = typer.Option("|", "--delimiter", "-d", help="Raw file delimiter"),
     interactive: bool = typer.Option(
@@ -159,11 +172,15 @@ def process(
         master_data_path=master,
         workflow_id=workflow_id,
         output_report_path=output,
-        segmen_filter=segment,
+        # Split like every other filter flag, so `--segment "A,B"` is a two-value
+        # keep-list rather than a lookup for a segment literally named "A,B".
+        segmen_filter=_split_list(segment),
         # An omitted flag stays None so the workflow default applies; a supplied
         # (even empty) value is the caller explicitly choosing what to drop.
         segmen_exclude=_split_list(exclude_segmen),
         source_exclude=_split_list(exclude_source),
+        source_include=_split_list(source),
+        kw_include=_split_list(kw),
         delimiter=delimiter,
     )
     report = PipelineOrchestrator.execute(config)

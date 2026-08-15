@@ -11,29 +11,30 @@ How to run
 4. If prompted: select your reference mapping file (.xlsx)
 5. If prompted (Qlola / Giro): select the extra workbook
 6. Choose where to save the output (.xlsx)
-7. Check the filter boxes (they are pre-filled per workflow - see below)
+7. Fill in the FILTERS boxes only if you want to narrow this run (see below)
 8. Click "Run Pipeline"
 
-Filter boxes (SEGMEN and SOURCE)
---------------------------------
-Every workflow lets you choose what goes in and what comes out. The boxes are
-pre-filled with what that report normally does, and you can edit them for a
-one-off run:
+FILTERS (SEGMENT, SOURCE, KW)
+----------------------------
+One box per dimension, on every report. There are only two things to know:
 
-  SEGMEN keep only : keep ONLY this segment. Blank = keep every segment.
-  SEGMEN exclude   : segments to drop, comma-separated. Blank = drop none.
-  SOURCE exclude   : SOURCE values to drop, comma-separated. Blank = drop none.
+  Empty box  = automatic. The report runs its own normal rules.
+  Typed text = keep ONLY what you typed. Comma-separated for several values.
+
+Each box shows what it does automatically when left empty, e.g.
+"auto: drops KORPORASI". You never have to type that rule yourself, and you
+never have to clear a box to get it.
 
 Examples:
-  - Report Data Statis pre-fills "KORPORASI" in SEGMEN exclude. Clear the box to
-    include corporate accounts this time; leave it to drop them as usual.
-  - Rincian Vol TF pre-fills "Wholesale" in SEGMEN exclude.
-  - Time Series FBI Briva pre-fills "NONWHOLESALE" in SEGMEN keep only.
-  - Time Series Active User Qlola pre-fills "CMS" in SOURCE exclude.
+  - Report Data Statis: empty SEGMENT = drops KORPORASI as usual.
+  - Time Series Active User Qlola: empty SOURCE = drops CMS as usual.
+  - Time Series FBI Briva: empty SEGMENT = keeps NONWHOLESALE as usual.
+  - Type "RITEL, KORPORASI" in SEGMENT = keep only those two, this run only.
 
-Matching ignores upper/lower case and extra spaces. Rows with a blank SEGMEN are
-always kept. Switching workflow resets the boxes to that workflow's defaults.
-The Summary sheet's "Filter Applied" line records what the run actually used.
+Matching ignores upper/lower case and extra spaces. If your file has no such
+column, the filter simply does nothing - it can never fail the run. Switching
+workflow clears the boxes. The Summary sheet's "Filter Applied" line records
+what the run actually used.
 
 Workflows (dropdown order)
 --------------------------
@@ -59,8 +60,8 @@ Report Data Statis (Workflow 3)
 -------------------------------
 Raw is pipe-delimited (often a .bin extract). Needs a UKER/unit mapping
 workbook. Keeps KANWIL MALANG, drops SEGMEN KORPORASI by default, and reports
-Count of ID_PRODUCT per branch. The KORPORASI drop is editable in the SEGMEN
-exclude box; KANWIL MALANG is always applied.
+Count of ID_PRODUCT per branch. To include corporate accounts for one run, type
+KORPORASI in the SEGMENT box; KANWIL MALANG is always applied.
 
 Report Giro (Workflow 7) — two Excel workbooks
 ----------------------------------------------
@@ -72,7 +73,7 @@ output path you choose. Deposito rows are skipped. Accounts missing from the
 monthly file are left blank. Balances are written as plain whole numbers
 (format 0) - concatenated digits, no commas and no decimal point.
 
-The SEGMEN and SOURCE boxes work here too: they filter the monthly source, so a
+The FILTERS boxes work here too: they filter the monthly source, so a
 filtered-out account keeps whatever its master cell already had. If your monthly
 file only has NO REK and SALDO IDR, they simply do nothing.
 

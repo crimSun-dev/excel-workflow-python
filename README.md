@@ -185,9 +185,11 @@ Options:
 | `--ref` | `-f` | Path to reference mapping `.xlsx`/`.csv` (required for `akumulasi`, `timeseries-active-user-qlola`, `report-data-statis`, and `timeseries-fbi-briva`) |
 | `--master` | `-m` | Master workbook: `ID` → `MAIN_CODE` for `timeseries-active-user-qlola`, or the giro master to update for `report-giro` |
 | `--out` | `-o` | Output report path (default `./Financial_Summary_Report.xlsx`) |
-| `--segment` | `-s` | Keep only this `SEGMEN` (e.g. `NONWHOLESALE`). Omit for the workflow default; pass `""` to keep every segment |
+| `--segment` | `-s` | Comma-separated `SEGMEN` keep-list (e.g. `NONWHOLESALE`). Omit for the workflow default; pass `""` to keep every segment |
 | `--exclude-segmen` | | Comma-separated `SEGMEN` values to drop (e.g. `KORPORASI,Wholesale`). Omit for the workflow default; pass `""` to drop none |
+| `--source` | | Comma-separated `SOURCE` keep-list. Omit for no inclusion filter (the workflow's `SOURCE` default stays in charge) |
 | `--exclude-source` | | Comma-separated `SOURCE` values to drop (e.g. `CMS`). Omit for the workflow default; pass `""` to drop none |
+| `--kw` | | Comma-separated `KW` keep-list. Omit for the workflow default; pass `""` to keep every `KW` |
 | `--delimiter` | `-d` | Raw file delimiter (default `\|`) |
 | `--gui` | `-g` | Launch the GUI file picker instead |
 
@@ -195,24 +197,32 @@ Options:
 
 The manual pivot let the operator tick and untick segments per run, so the
 automated filters are **defaults, not hardcoded rules**. Each workflow declares
-what it normally drops; the GUI seeds its fields with those values and leaves
-them editable, and the CLI flags above do the same headlessly.
+what it normally does; the GUI's **FILTERS** block exposes one box per dimension
+and the CLI flags above do the same headlessly.
 
-| Dimension | Control | Default | Cleared field / `""` |
-|---|---|---|---|
-| Keep only one `SEGMEN` | `SEGMEN keep only` / `--segment` | e.g. `NONWHOLESALE` for Briva | Every segment counts |
-| Drop `SEGMEN` values | `SEGMEN exclude` / `--exclude-segmen` | e.g. `KORPORASI` for Report Data Statis | Nothing is dropped |
-| Drop `SOURCE` values | `SOURCE exclude` / `--exclude-source` | `CMS` for Qlola, empty elsewhere | Nothing is dropped |
+The GUI contract is one rule, applied to all three boxes:
 
-Both `SEGMEN` filters are case-insensitive and trimmed, are AND-combined, and are
-a no-op when the extract has no `SEGMEN` column. Blank/null `SEGMEN` cells never
-match an exclusion, so they survive. Inclusion and exclusion stay separate
-fields — there is no single filter with a negation flag.
+| Box | Empty (the default state) | Typed |
+|---|---|---|
+| `SEGMENT` | The workflow's baked rule runs (drop `KORPORASI`, keep `NONWHOLESALE`, …) | Keep **only** the listed segments; the baked rule is replaced for that run |
+| `SOURCE` | The workflow's baked rule runs (Qlola drops `CMS`) | Keep **only** the listed `SOURCE` values |
+| `KW` | No `KW` filtering | Keep **only** the listed `KW` values |
 
-So to include corporate accounts in a Report Data Statis run, clear the
-`SEGMEN exclude` field (or pass `--exclude-segmen ""`); leaving it untouched keeps
-dropping `KORPORASI` exactly as before. The Summary sheet's **Filter Applied**
-line always states the filters that run actually used.
+Boxes are never pre-filled, because a filled box reads as something the operator
+must manage and clearing it would read as "remove all filters". Instead each box
+carries a hint (`auto: drops KORPORASI`) stating what the empty state does.
+
+Every filter is case-insensitive and trimmed, they are AND-combined, and each is
+a **no-op when the extract has no such column** — `KW` is resolved against the
+`KW`, `PRODUCT`, `GROUP_PRODUCT`, `KAWIL` header aliases. Blank/null cells never
+match an exclusion, so they survive it. Internally, inclusion and exclusion
+remain separate fields (`segmen_include`, `exclude_segmen`, `source_exclude`,
+`kw_include`) — there is no single filter with a negation flag.
+
+So to include corporate accounts in a Report Data Statis run, type `KORPORASI`
+in the `SEGMENT` box (or pass `--exclude-segmen ""` headlessly); leaving the box
+empty keeps dropping `KORPORASI` exactly as before. The Summary sheet's
+**Filter Applied** line always states the filters that run actually used.
 
 `KAWIL` is deliberately not an operator control: Report Data Statis always keeps
 only `KANWIL MALANG`.
@@ -229,14 +239,14 @@ filters, and choose an output path, then click **Run Pipeline**. The
 reference-file and master-data rows are shown only for the workflows that need
 them.
 
-The **SEGMEN keep only**, **SEGMEN exclude**, and **SOURCE exclude** fields are
-re-seeded with the selected workflow's defaults every time the dropdown changes,
-so switching workflows shows what that report filters out and can never carry
-another workflow's values over. They are live for every workflow — Report Giro
-included, where they apply to the monthly source and are simply a no-op when that
-extract has no `SEGMEN`/`SOURCE` column. Input button labels and file-type
-filters follow the selected workflow,
-so Report Giro offers Excel workbook pickers instead of the text/CSV ones.
+The **FILTERS** block holds one box each for **SEGMENT**, **SOURCE**, and **KW**.
+All three are cleared every time the dropdown changes, so an empty box always
+means "this report's automatic rules" and no value can carry over between
+workflows; the hint beside each box states what those rules are. They are live
+for every workflow — Report Giro included, where they apply to the monthly
+source and are simply a no-op when that extract has no such column. Input button
+labels and file-type filters follow the selected workflow, so Report Giro offers
+Excel workbook pickers instead of the text/CSV ones.
 
 ## Input format
 

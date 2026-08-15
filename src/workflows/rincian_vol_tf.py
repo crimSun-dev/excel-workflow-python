@@ -25,6 +25,7 @@ RINCIAN_VOL_TF_DEFINITION = WorkflowDefinition(
     exclude_segmen=("Wholesale",),
     supports_segment_filter=True,
     has_source_filter=True,
+    has_kw_filter=True,
 )
 
 

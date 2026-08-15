@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..aggregation import apply_segmen_filters
 from ..enrichment import (
     ID_ALIASES,
     UNMAPPED_SENTINEL,
@@ -64,9 +63,10 @@ TIMESERIES_ACTIVE_USER_QLOLA_DEFINITION = WorkflowDefinition(
     required_columns=("SOURCE", "ID", "FREKUENSI"),
     source_exclude=("CMS",),
     has_source_filter=True,
-    # No default SEGMEN rule, but the fields stay live so an operator can scope a
-    # one-off run; they are a no-op when the extract has no SEGMEN column.
+    # No default SEGMEN/KW rule, but the fields stay live so an operator can
+    # scope a one-off run; they are a no-op when the extract has no such column.
     supports_segment_filter=True,
+    has_kw_filter=True,
 )
 
 
@@ -103,17 +103,11 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
         # 2. Validate mandatory input columns.
         self._validate_columns(data)
 
-        # 3. Exclude the configured SOURCE values (default CMS, case-insensitive);
-        # a GUI/CLI override replaces the default, and an empty list disables it.
-        # The SEGMEN fields have no default here but are honored when the operator
-        # sets them, so the controls are never dead input.
-        source_exclude = self.resolve_source_exclude(config)
-        data = self.apply_source_exclude(data, source_exclude)
-        data = apply_segmen_filters(
-            data,
-            self.resolve_segment_filter(config),
-            self.resolve_segmen_exclude(config),
-        )
+        # 3. Apply the operator's SOURCE / SEGMENT / KW filters. SOURCE defaults
+        # to dropping CMS here; an empty GUI box keeps that default while a typed
+        # value replaces it. SEGMENT and KW have no default but are honored when
+        # set, so the controls are never dead input.
+        data = self.apply_runtime_filters(data, config)
 
         # 4. UKER enrich for detail context (not the crosstab key). The branch
         # code is canonicalized here, at ingest, before the generic enricher runs.

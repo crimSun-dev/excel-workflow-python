@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
@@ -47,12 +47,13 @@ class ProcessingConfig(BaseModel):
     )
     delimiter: str = Field(default="|", description="Delimiter used in raw file")
     lookup_key: str = Field(default="KODE_UKER", description="Join key column name")
-    segmen_filter: Optional[str] = Field(
+    segmen_filter: Optional[Union[str, list[str]]] = Field(
         default=None,
-        description="Runtime override for the workflow's SEGMEN inclusion filter "
-        "(keep only this segment). None keeps the workflow definition's default "
-        "(e.g. 'NONWHOLESALE' for Briva); an empty string keeps every segment. "
-        "Ignored by workflows that do not declare supports_segment_filter",
+        description="Runtime override for the workflow's SEGMEN keep-list "
+        "(keep only these segments). Accepts one value or a list. None keeps "
+        "the workflow definition's default (e.g. 'NONWHOLESALE' for Briva); an "
+        "empty string/list keeps every segment. Ignored by workflows that do "
+        "not declare supports_segment_filter",
     )
     segmen_exclude: Optional[list[str]] = Field(
         default=None,
@@ -67,6 +68,21 @@ class ProcessingConfig(BaseModel):
         "None keeps the workflow definition's default (e.g. ['CMS'] for Qlola); "
         "an empty list disables SOURCE filtering entirely. Ignored by workflows "
         "that do not declare has_source_filter",
+    )
+    source_include: Optional[list[str]] = Field(
+        default=None,
+        description="Runtime SOURCE keep-list (keep only these SOURCE values). "
+        "None/empty means no inclusion filter, leaving the workflow's SOURCE "
+        "exclusion policy in charge. Ignored by workflows that do not declare "
+        "has_source_filter",
+    )
+    kw_include: Optional[list[str]] = Field(
+        default=None,
+        description="Runtime override for the workflow's KW keep-list. None "
+        "keeps the workflow definition's default; an empty list keeps every KW. "
+        "The KW column is resolved by header alias (KW, PRODUCT, GROUP_PRODUCT, "
+        "KAWIL) and the filter is a no-op when none is present. Ignored by "
+        "workflows that do not declare has_kw_filter",
     )
     number_format: str = Field(
         default="#,##0.00", description="Excel display format for IDR volume"

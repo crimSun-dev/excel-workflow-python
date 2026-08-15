@@ -29,7 +29,6 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from ..aggregation import apply_segmen_filters
 from ..enrichment import canonicalize_join_id, normalize_header, resolve_alias_column
 from ..exporter import PLAIN_INTEGER_FORMAT, ExportError
 from ..schemas import ProcessingConfig
@@ -87,10 +86,11 @@ REPORT_GIRO_DEFINITION = WorkflowDefinition(
     # plain-integer look every other report ships (Portal BG / Vol TF).
     number_format=PLAIN_INTEGER_FORMAT,
     # The monthly source usually carries only NO REK + SALDO IDR, but when it
-    # does have SEGMEN/SOURCE the operator gets the same live controls as the
+    # does have SEGMEN/SOURCE/KW the operator gets the same live controls as the
     # other reports. Defaults stay empty so nothing is dropped unasked.
     supports_segment_filter=True,
     has_source_filter=True,
+    has_kw_filter=True,
     raw_button_label="1. Monthly Giro File...",
     raw_picker_title="Select the monthly giro source workbook",
     raw_filetypes=(("Excel Workbook", "*.xlsx *.xls *.xlsm"), ("All files", "*.*")),
@@ -165,11 +165,11 @@ class ReportGiroStrategy(WorkflowStrategy):
         and a balance column wins. Duplicate accounts keep the first hit,
         matching VLOOKUP.
 
-        The operator's SOURCE exclusion and SEGMEN keep-only/exclude filters are
-        applied to the winning sheet *before* the lookup is built, so a filtered
-        account simply never matches and its master cell is left as it was. A
-        monthly extract without those columns makes the filters a no-op (the
-        Portal BG / Qlola precedent), so typing a filter can never fail a run.
+        The operator's SEGMENT / SOURCE / KW filters are applied to the winning
+        sheet *before* the lookup is built, so a filtered account simply never
+        matches and its master cell is left as it was. A monthly extract without
+        those columns makes the filters a no-op (the Portal BG / Qlola
+        precedent), so typing a filter can never fail a run.
         """
         if not monthly_path.exists():
             raise WorkflowValidationError(
@@ -184,14 +184,7 @@ class ReportGiroStrategy(WorkflowStrategy):
             if account_col is None or balance_col is None:
                 attempts.append((sheet_name, [str(c) for c in frame.columns]))
                 continue
-            frame = self.apply_source_exclude(
-                frame, self.resolve_source_exclude(config)
-            )
-            frame = apply_segmen_filters(
-                frame,
-                self.resolve_segment_filter(config),
-                self.resolve_segmen_exclude(config),
-            )
+            frame = self.apply_runtime_filters(frame, config)
             return self._mapping_from_columns(frame, account_col, balance_col)
 
         raise GiroColumnResolutionError(

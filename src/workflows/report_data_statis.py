@@ -44,6 +44,7 @@ REPORT_DATA_STATIS_DEFINITION = WorkflowDefinition(
     # clear the field to keep corporate accounts in a one-off run.
     supports_segment_filter=True,
     has_source_filter=True,
+    has_kw_filter=True,
     kawil_include="KANWIL MALANG",
     value_display_names=(("ID_PRODUCT", "Count of ID_PRODUCT"),),
 )

@@ -2,25 +2,34 @@
 
 Native OS file-picker dialog launched when the user runs the app with no CLI
 arguments. Lets a non-technical user pick a workflow, select the raw file,
-(for Akumulasi) a reference workbook, the SEGMEN keep-only / SEGMEN exclude /
-SOURCE exclude filters, and an output path, then runs the pipeline. The
-reference-file row is shown only for the workflows that need it.
+(for Akumulasi) a reference workbook, the FILTERS (SEGMENT / SOURCE / KW), and
+an output path, then runs the pipeline. The reference-file row is shown only for
+the workflows that need it.
 
-Each filter field is seeded with the selected workflow's default (e.g. KORPORASI
-for Report Data Statis) and stays editable, so the operator can see what the
-report drops by default and still decide per run what to include or exclude.
+Filter semantics, one rule for all three boxes:
+
+* **Empty box = automatic.** The report runs its own baked rules (Report Data
+  Statis drops KORPORASI, Qlola drops CMS, Briva keeps NONWHOLESALE). The boxes
+  are therefore never pre-filled - a filled box would read as something the
+  operator has to manage, and clearing it would read as "remove all filters".
+  What each report does automatically is shown as a hint beside the box.
+* **Typed values = keep only those.** A comma-separated keep-list that replaces
+  that dimension's automatic rule for the run.
+
 Fields are greyed out only for workflows where the filter cannot apply
-(`supports_segment_filter` / `has_source_filter`).
+(`supports_segment_filter` / `has_source_filter` / `has_kw_filter`), so a
+disabled box always means exactly "this value would be ignored".
 
 Input button labels, dialog titles, and extension filters come from the
 workflow definition, so Report Giro offers two Excel workbook pickers rather
 than the pipe-delimited text labels the other workflows use.
 
 The small pure helpers below (`source_filter_enabled`, `segment_filter_enabled`,
-`default_source_text`, `default_segmen_include_text`,
-`default_segmen_exclude_text`, `parse_exclude_list`, `raw_picker_config`,
-`master_picker_config`) hold the fields' behavior so they are testable without a
-display server; `launch_gui` only wires them to widgets.
+`kw_filter_enabled`, `default_source_text`, `default_segmen_include_text`,
+`default_segmen_exclude_text`, `default_kw_text`, `filter_hint_text`,
+`parse_filter_input`, `raw_picker_config`, `master_picker_config`) hold the
+fields' behavior so they are testable without a display server; `launch_gui`
+only wires them to widgets.
 """
 
 from __future__ import annotations
@@ -58,6 +67,11 @@ def segment_filter_enabled(workflow_id: WorkflowId | str) -> bool:
     ignored, so a disabled field always means exactly that.
     """
     return get_definition(workflow_id).supports_segment_filter
+
+
+def kw_filter_enabled(workflow_id: WorkflowId | str) -> bool:
+    """Whether the KW field accepts input for this workflow."""
+    return get_definition(workflow_id).has_kw_filter
 
 
 def raw_picker_config(
@@ -99,26 +113,66 @@ def default_segmen_include_text(workflow_id: WorkflowId | str) -> str:
 
 
 def default_segmen_exclude_text(workflow_id: WorkflowId | str) -> str:
-    """The workflow's default SEGMEN exclusion list as GUI text (e.g. 'KORPORASI').
-
-    Seeding the field with the default is what makes the automatic behavior
-    visible: the operator can see KORPORASI is being dropped and edit or clear it
-    instead of having to accept it.
-    """
+    """The workflow's default SEGMEN exclusion list as GUI text (e.g. 'KORPORASI')."""
     definition = get_definition(workflow_id)
     if not definition.supports_segment_filter:
         return ""
     return ", ".join(definition.exclude_segmen)
 
 
-def parse_exclude_list(text: str) -> list[str]:
-    """Splits a comma-separated exclusion field into a trimmed list.
+def default_kw_text(workflow_id: WorkflowId | str) -> str:
+    """The workflow's default KW keep-list as GUI text (empty for every report today)."""
+    definition = get_definition(workflow_id)
+    if not definition.has_kw_filter:
+        return ""
+    return ", ".join(definition.kw_include)
 
-    An empty/whitespace-only field yields `[]`, which explicitly means "exclude
-    nothing" - the operator clearing the field is a deliberate instruction, not
-    a request to fall back to the workflow default.
+
+def filter_hint_text(workflow_id: WorkflowId | str, dimension: str) -> str:
+    """What this report does with a dimension when its box is left empty.
+
+    The boxes ship empty so that empty reads as "automatic", which would
+    otherwise hide the rule the report applies for free. This hint is what keeps
+    that rule visible: "auto: drops KORPORASI" beside an empty SEGMENT box says
+    the same thing the old pre-filled field did, without inviting the operator
+    to manage it.
     """
-    return [token.strip() for token in text.split(",") if token.strip()]
+    dimension = dimension.upper()
+    if dimension == "SEGMENT":
+        if not segment_filter_enabled(workflow_id):
+            return "not used by this report"
+        keeps = default_segmen_include_text(workflow_id)
+        drops = default_segmen_exclude_text(workflow_id)
+    elif dimension == "SOURCE":
+        if not source_filter_enabled(workflow_id):
+            return "not used by this report"
+        keeps = ""
+        drops = default_source_text(workflow_id)
+    elif dimension == "KW":
+        if not kw_filter_enabled(workflow_id):
+            return "not used by this report"
+        keeps = default_kw_text(workflow_id)
+        drops = ""
+    else:
+        raise ValueError(f"Unknown filter dimension: {dimension!r}")
+
+    parts = []
+    if keeps:
+        parts.append(f"keeps {keeps}")
+    if drops:
+        parts.append(f"drops {drops}")
+    return f"auto: {', '.join(parts)}" if parts else "auto: keeps everything"
+
+
+def parse_filter_input(text: str) -> list[str] | None:
+    """Turns one filter box into a keep-list, or `None` for "run the defaults".
+
+    An empty/whitespace-only box yields `None`, which the workflow reads as
+    "nothing supplied" and answers with its own baked rules. Any typed value
+    yields the trimmed, comma-separated keep-list that replaces them for the run.
+    """
+    tokens = [token.strip() for token in text.split(",") if token.strip()]
+    return tokens or None
 
 
 def unmapped_warning_text(report: PipelineReport) -> str | None:
@@ -166,11 +220,14 @@ def launch_gui() -> None:
     ref_var = tk.StringVar(value="No file selected")
     master_var = tk.StringVar(value="No file selected")
     out_var = tk.StringVar(value="./Financial_Summary_Report.xlsx")
-    seg_var = tk.StringVar(value=default_segmen_include_text(WorkflowId.AKUMULASI))
-    seg_exclude_var = tk.StringVar(
-        value=default_segmen_exclude_text(WorkflowId.AKUMULASI)
-    )
-    source_var = tk.StringVar(value=default_source_text(WorkflowId.AKUMULASI))
+    # Filter boxes start (and stay) empty: empty means "run this report's
+    # automatic rules", which the hint labels spell out.
+    seg_var = tk.StringVar(value="")
+    source_var = tk.StringVar(value="")
+    kw_var = tk.StringVar(value="")
+    seg_hint_var = tk.StringVar(value="")
+    source_hint_var = tk.StringVar(value="")
+    kw_hint_var = tk.StringVar(value="")
 
     def selected_workflow_id() -> str:
         return choices[workflow_var.get()]
@@ -238,23 +295,22 @@ def launch_gui() -> None:
             )
             return
         output = state["out"] or Path(out_var.get())
-        # A disabled field must never influence the run, so its value is only read
-        # for workflows that expose it. `None` means "use the workflow default";
-        # a cleared but enabled field is passed through as empty, which is the
-        # operator explicitly asking for no filtering on that dimension.
+        # A disabled field must never influence the run, so its value is only
+        # read for workflows that expose it. An empty box gives `None`, which the
+        # workflow answers with its baked defaults; a typed value becomes that
+        # dimension's keep-list and replaces the default policy for this run -
+        # hence the paired empty exclusion lists below.
         segment = (
-            seg_var.get().strip() if definition.supports_segment_filter else None
-        )
-        segmen_exclude = (
-            parse_exclude_list(seg_exclude_var.get())
+            parse_filter_input(seg_var.get())
             if definition.supports_segment_filter
             else None
         )
-        source_exclude = (
-            parse_exclude_list(source_var.get())
+        source = (
+            parse_filter_input(source_var.get())
             if definition.has_source_filter
             else None
         )
+        kw = parse_filter_input(kw_var.get()) if definition.has_kw_filter else None
         config = ProcessingConfig(
             raw_data_path=state["raw"],
             reference_data_path=state["ref"] if needs_ref else None,
@@ -262,8 +318,10 @@ def launch_gui() -> None:
             workflow_id=workflow_id,
             output_report_path=output,
             segmen_filter=segment,
-            segmen_exclude=segmen_exclude,
-            source_exclude=source_exclude,
+            segmen_exclude=None if segment is None else [],
+            source_include=source,
+            source_exclude=None if source is None else [],
+            kw_include=kw,
         )
         report = PipelineOrchestrator.execute(config)
         if report.success:
@@ -327,50 +385,78 @@ def launch_gui() -> None:
         row=5, column=1, columnspan=2, **pad
     )
 
-    segment_field_label = ttk.Label(root, text="SEGMEN keep only:")
-    segment_field_label.grid(row=6, column=0, **pad)
-    segment_entry = ttk.Entry(root, textvariable=seg_var, width=30)
-    segment_entry.grid(row=6, column=1, columnspan=2, sticky="w", **pad)
+    # --- FILTERS block: one box per dimension, all three on every report ---
+    filters_frame = ttk.LabelFrame(root, text="FILTERS")
+    filters_frame.grid(row=6, column=0, columnspan=3, sticky="we", **pad)
+    ttk.Label(
+        filters_frame,
+        text="Leave a box empty to run this report's automatic rules. "
+        "Type values (comma-separated) to keep only those.",
+        wraplength=560,
+        justify="left",
+    ).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(6, 2))
 
-    segment_exclude_label = ttk.Label(root, text="SEGMEN exclude:")
-    segment_exclude_label.grid(row=7, column=0, **pad)
-    segment_exclude_entry = ttk.Entry(root, textvariable=seg_exclude_var, width=30)
-    segment_exclude_entry.grid(row=7, column=1, columnspan=2, sticky="w", **pad)
+    segment_field_label = ttk.Label(filters_frame, text="SEGMENT:")
+    segment_field_label.grid(row=1, column=0, sticky="e", padx=10, pady=4)
+    segment_entry = ttk.Entry(filters_frame, textvariable=seg_var, width=30)
+    segment_entry.grid(row=1, column=1, sticky="w", padx=4, pady=4)
+    segment_hint_label = ttk.Label(filters_frame, textvariable=seg_hint_var)
+    segment_hint_label.grid(row=1, column=2, sticky="w", padx=6, pady=4)
 
-    source_field_label = ttk.Label(root, text="SOURCE exclude:")
-    source_field_label.grid(row=8, column=0, **pad)
-    source_entry = ttk.Entry(root, textvariable=source_var, width=30)
-    source_entry.grid(row=8, column=1, columnspan=2, sticky="w", **pad)
+    source_field_label = ttk.Label(filters_frame, text="SOURCE:")
+    source_field_label.grid(row=2, column=0, sticky="e", padx=10, pady=4)
+    source_entry = ttk.Entry(filters_frame, textvariable=source_var, width=30)
+    source_entry.grid(row=2, column=1, sticky="w", padx=4, pady=4)
+    source_hint_label = ttk.Label(filters_frame, textvariable=source_hint_var)
+    source_hint_label.grid(row=2, column=2, sticky="w", padx=6, pady=4)
+
+    kw_field_label = ttk.Label(filters_frame, text="KW:")
+    kw_field_label.grid(row=3, column=0, sticky="e", padx=10, pady=(4, 8))
+    kw_entry = ttk.Entry(filters_frame, textvariable=kw_var, width=30)
+    kw_entry.grid(row=3, column=1, sticky="w", padx=4, pady=(4, 8))
+    kw_hint_label = ttk.Label(filters_frame, textvariable=kw_hint_var)
+    kw_hint_label.grid(row=3, column=2, sticky="w", padx=6, pady=(4, 8))
 
     ttk.Button(root, text="Run Pipeline", command=run, width=22).grid(
-        row=9, column=0, columnspan=3, **pad
+        row=7, column=0, columnspan=3, **pad
     )
 
     def toggle_optional_rows(*_args: object) -> None:
-        """Show reference / master rows and the SOURCE field per workflow needs."""
+        """Show reference / master rows and set the FILTERS state per workflow."""
         workflow_id = selected_workflow_id()
         definition = get_definition(workflow_id)
         # Input labels follow the workflow: Report Giro picks two Excel
         # workbooks, so "Raw Data File" would misdescribe both of them.
         raw_button.configure(text=raw_picker_config(workflow_id)[0])
         master_button.configure(text=master_picker_config(workflow_id)[0])
-        # Filter fields are re-seeded with the selected workflow's defaults, so
-        # switching workflows shows what that report filters out by default and
-        # can never carry another workflow's values over.
-        source_var.set(default_source_text(workflow_id))
-        seg_var.set(default_segmen_include_text(workflow_id))
-        seg_exclude_var.set(default_segmen_exclude_text(workflow_id))
-        enabled = source_filter_enabled(workflow_id)
-        source_entry.configure(state="normal" if enabled else "disabled")
-        source_field_label.configure(state="normal" if enabled else "disabled")
-        # Greyed out only where SEGMEN cannot apply, so a disabled field always
-        # means the value would be ignored rather than silently discarded.
-        segment_enabled = segment_filter_enabled(workflow_id)
-        state_name = "normal" if segment_enabled else "disabled"
-        segment_entry.configure(state=state_name)
-        segment_field_label.configure(state=state_name)
-        segment_exclude_entry.configure(state=state_name)
-        segment_exclude_label.configure(state=state_name)
+        # Filter boxes are cleared on every switch, so an empty box always means
+        # "this report's automatic rules" and no value can carry over between
+        # workflows. The hints beside them state what those rules are.
+        for var in (seg_var, source_var, kw_var):
+            var.set("")
+        # Greyed out only where the dimension cannot apply, so a disabled field
+        # always means the value would be ignored rather than silently discarded.
+        for dimension, enabled, entry, label, hint_var in (
+            (
+                "SEGMENT",
+                segment_filter_enabled(workflow_id),
+                segment_entry,
+                segment_field_label,
+                seg_hint_var,
+            ),
+            (
+                "SOURCE",
+                source_filter_enabled(workflow_id),
+                source_entry,
+                source_field_label,
+                source_hint_var,
+            ),
+            ("KW", kw_filter_enabled(workflow_id), kw_entry, kw_field_label, kw_hint_var),
+        ):
+            state_name = "normal" if enabled else "disabled"
+            entry.configure(state=state_name)
+            label.configure(state=state_name)
+            hint_var.set(filter_hint_text(workflow_id, dimension))
         if definition.requires_reference:
             ref_button.grid()
             ref_label.grid()

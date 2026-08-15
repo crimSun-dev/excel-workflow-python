@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
-from ..aggregation import AggFunc, AggregationEngine
+from ..aggregation import (
+    AggFunc,
+    AggregationEngine,
+    apply_kw_filters,
+    apply_segmen_filters,
+    apply_source_filters,
+)
 from ..enrichment import LOOKUP_KEY_ALIASES, resolve_alias_column
 from ..exporter import PLAIN_INTEGER_FORMAT, ExcelReportExporter
 from ..ingestion import IngestionEngine
@@ -88,15 +94,15 @@ class WorkflowDefinition:
     # Default SEGMEN values to drop (e.g. Report Data Statis drops KORPORASI).
     # A runtime `ProcessingConfig.segmen_exclude` overrides this default.
     exclude_segmen: tuple[str, ...] = ()
-    # Whether this workflow exposes the SEGMEN controls (both the keep-only and
-    # the exclude field). True for every workflow that can honor them - including
-    # Report Giro, which applies them to its monthly source. False greys the
-    # fields out, so a disabled field always means "this value would be ignored".
+    # Whether this workflow exposes the SEGMENT filter control. True for every
+    # workflow that can honor it - including Report Giro, which applies it to
+    # its monthly source. False greys the field out, so a disabled field always
+    # means "this value would be ignored".
     supports_segment_filter: bool = False
     # Default SEGMEN inclusion filter (e.g. Briva keeps only NONWHOLESALE).
-    # Seeds the GUI's keep-only field and applies when the operator leaves it
-    # untouched; distinct from the `exclude_segmen` exclusion list so inclusion
-    # vs exclusion never share a flag.
+    # Applies whenever the operator leaves the SEGMENT box empty; distinct from
+    # the `exclude_segmen` exclusion list so inclusion vs exclusion never share
+    # a flag.
     segmen_include: str | None = None
     # Definition-baked KAWIL (regional office) inclusion filter, e.g. Report Data
     # Statis keeps only "KANWIL MALANG". Deliberately separate from the SEGMEN
@@ -116,6 +122,13 @@ class WorkflowDefinition:
     # SOURCE field only for workflows declaring True; all others grey it out and
     # ignore any value it holds).
     has_source_filter: bool = False
+    # Definition-baked KW keep-list (empty = keep every KW). KW is resolved by
+    # header alias, so the same control serves extracts that spell the dimension
+    # KW, PRODUCT, GROUP_PRODUCT or KAWIL, and is a no-op where none exist.
+    kw_include: tuple[str, ...] = ()
+    # Whether this workflow exposes the KW filter control, mirroring
+    # `has_source_filter`: False greys the field out and discards its value.
+    has_kw_filter: bool = False
     # Whether this workflow needs a second (master-data) reference file.
     requires_master_data: bool = False
     # Ordered value columns to aggregate. Empty => single-column workflow that
@@ -191,20 +204,25 @@ class WorkflowStrategy(ABC):
         # 2. Validate that mandatory input columns are present up front.
         self._validate_columns(data)
 
-        # 3. Drop the excluded SOURCE values before enrichment, so a row that is
+        # 3. Resolve the SOURCE filter before enrichment, so a row that is
         # filtered out never costs a lookup and never reaches the detail sheet.
-        data = self.apply_source_exclude(data, self.resolve_source_exclude(config))
+        data = apply_source_filters(
+            data,
+            self.resolve_source_include(config),
+            self.resolve_source_exclude(config),
+        )
 
         # 4. Optional reference enrichment (Akumulasi only).
         data, unmapped_count = self._enrich(config, data)
 
-        # 5. Aggregate (group + sum, with inclusion/exclusion SEGMEN handling).
-        # Both SEGMEN filters resolve to the operator's runtime choice when one
-        # was supplied, and to the workflow's baked default otherwise.
+        # 5. Aggregate (group + sum, with SEGMEN/KW filter handling). Every
+        # filter resolves to the operator's runtime choice when one was
+        # supplied, and to the workflow's baked default otherwise.
         aggregator = AggregationEngine(
             segment_filter=self.resolve_segment_filter(config),
             exclude_segmen=self.resolve_segmen_exclude(config),
             kawil_include=definition.kawil_include,
+            kw_include=self.resolve_kw_include(config),
         )
         aggregated = aggregator.aggregate(
             data,
@@ -249,18 +267,21 @@ class WorkflowStrategy(ABC):
         """Default: no enrichment. Returns the data untouched, 0 unmapped."""
         return data, 0
 
-    def resolve_segment_filter(self, config: "ProcessingConfig") -> str | None:
-        """Effective SEGMEN "keep only" value: runtime choice beats the default.
+    def resolve_segment_filter(self, config: "ProcessingConfig") -> str | list[str] | None:
+        """Effective SEGMENT keep-list: runtime choice beats the default.
 
-        Returns `None` when no inclusion filter applies. An operator who clears
-        the field is asking for every segment, which is a deliberate instruction
-        rather than a request to fall back to the workflow default. Workflows
-        that do not declare `supports_segment_filter` always keep their baked
-        default, so a stale value can never leak into them.
+        Returns `None` when no inclusion filter applies. A supplied but empty
+        value is the caller asking for every segment - a deliberate instruction
+        rather than a request to fall back to the workflow default (the GUI
+        sends `None`, not an empty string, when the operator wants the default).
+        Workflows that do not declare `supports_segment_filter` always keep
+        their baked default, so a stale value can never leak into them.
         """
         definition = self.definition
         if definition.supports_segment_filter and config.segmen_filter is not None:
-            return config.segmen_filter.strip() or None
+            if isinstance(config.segmen_filter, str):
+                return config.segmen_filter.strip() or None
+            return [s.strip() for s in config.segmen_filter if s.strip()] or None
         return definition.segmen_include
 
     def resolve_segmen_exclude(self, config: "ProcessingConfig") -> list[str]:
@@ -288,6 +309,47 @@ class WorkflowStrategy(ABC):
             return [s.strip() for s in config.source_exclude if s.strip()]
         return list(definition.source_exclude)
 
+    def resolve_source_include(self, config: "ProcessingConfig") -> list[str]:
+        """Effective SOURCE keep-list. Runtime-only: no workflow bakes one in.
+
+        Workflows that do not declare `has_source_filter` always return `[]`,
+        matching `resolve_source_exclude`.
+        """
+        if not self.definition.has_source_filter or config.source_include is None:
+            return []
+        return [s.strip() for s in config.source_include if s.strip()]
+
+    def resolve_kw_include(self, config: "ProcessingConfig") -> list[str]:
+        """Effective KW keep-list: runtime override beats the definition.
+
+        An empty list explicitly means "keep every KW"; `None` (nothing supplied)
+        falls back to the definition. Workflows that do not declare
+        `has_kw_filter` always return `[]`.
+        """
+        definition = self.definition
+        if not definition.has_kw_filter:
+            return []
+        if config.kw_include is not None:
+            return [s.strip() for s in config.kw_include if s.strip()]
+        return list(definition.kw_include)
+
+    def apply_runtime_filters(
+        self, data: pd.DataFrame, config: "ProcessingConfig"
+    ) -> pd.DataFrame:
+        """Applies the resolved SEGMENT / SOURCE / KW filters to a frame.
+
+        The one entry point the custom-`execute` workflows (Qlola, Giro) share
+        with the template below, so every report answers the operator's filter
+        boxes identically. Dimensions whose column is absent are a no-op.
+        """
+        data = apply_source_filters(
+            data, self.resolve_source_include(config), self.resolve_source_exclude(config)
+        )
+        data = apply_segmen_filters(
+            data, self.resolve_segment_filter(config), self.resolve_segmen_exclude(config)
+        )
+        return apply_kw_filters(data, self.resolve_kw_include(config))
+
     @staticmethod
     def apply_source_exclude(
         data: pd.DataFrame, source_exclude: list[str]
@@ -296,11 +358,7 @@ class WorkflowStrategy(ABC):
 
         An empty list is a no-op, so pre-existing workflows are untouched.
         """
-        if not source_exclude or "SOURCE" not in data.columns:
-            return data
-        excluded = {s.strip().casefold() for s in source_exclude}
-        source = data["SOURCE"].astype(str).str.strip().str.casefold()
-        return data[~source.isin(excluded)]
+        return apply_source_filters(data, exclude=source_exclude)
 
     def _filter_label(self, config: "ProcessingConfig") -> str | None:
         """Human-readable description of the filters this run actually applied.
@@ -311,17 +369,24 @@ class WorkflowStrategy(ABC):
         parts: list[str] = []
         include = self.resolve_segment_filter(config)
         if include:
-            parts.append(f"{include} (only)")
+            values = [include] if isinstance(include, str) else list(include)
+            parts.append(f"{', '.join(values)} (only)")
         segmen_exclude = self.resolve_segmen_exclude(config)
         if segmen_exclude:
             parts.append(f"{', '.join(segmen_exclude)} (excluded)")
-        # KAWIL and SOURCE are reported alongside the SEGMEN rules so the
+        # KAWIL, SOURCE and KW are reported alongside the SEGMEN rules so the
         # metadata block never understates what was filtered out.
         if self.definition.kawil_include:
             parts.append(f"KAWIL {self.definition.kawil_include} (only)")
+        source_include = self.resolve_source_include(config)
+        if source_include:
+            parts.append(f"{', '.join(source_include)} (SOURCE only)")
         source_exclude = self.resolve_source_exclude(config)
         if source_exclude:
             parts.append(f"{', '.join(source_exclude)} (SOURCE excluded)")
+        kw_include = self.resolve_kw_include(config)
+        if kw_include:
+            parts.append(f"{', '.join(kw_include)} (KW only)")
         return "; ".join(parts) or None
 
     def _validate_columns(self, data: pd.DataFrame) -> None:

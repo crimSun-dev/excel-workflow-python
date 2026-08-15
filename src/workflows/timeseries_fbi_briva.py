@@ -39,6 +39,7 @@ TIMESERIES_FBI_BRIVA_DEFINITION = WorkflowDefinition(
     segmen_include="NONWHOLESALE",
     supports_segment_filter=True,
     has_source_filter=True,
+    has_kw_filter=True,
     value_display_names=(("VOLUME_IDR", "Sum of VOLUME_IDR"),),
 )
 
