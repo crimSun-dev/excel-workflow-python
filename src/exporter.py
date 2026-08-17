@@ -4,6 +4,9 @@ Writes a styled two-sheet workbook using openpyxl (no Excel install required):
     * Summary_Report  - tabular pivot view + Grand Total, corporate styling,
                         plain integer cells (no comma/decimal separators).
     * Enriched_Data   - full row-level audit trail.
+
+Every text cell goes through `sanitize_cell_value` first, because the raw
+extracts carry control characters that the .xlsx format cannot represent.
 """
 
 from __future__ import annotations
@@ -15,6 +18,11 @@ from typing import Literal
 
 import pandas as pd
 from openpyxl import Workbook
+
+# The exact set openpyxl refuses to write (XML 1.0 forbids these control
+# characters). Imported rather than re-declared so the strip can never drift
+# out of sync with the check that raises IllegalCharacterError.
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -42,6 +50,24 @@ NumericRounding = Literal["round", "ceil"]
 
 class ExportError(Exception):
     """Raised when writing or styling the Excel output file fails."""
+
+
+def sanitize_cell_value(value: object) -> object:
+    """Strips characters the .xlsx format cannot store, leaving the rest as-is.
+
+    Core-banking extracts routinely carry stray control bytes inside text
+    fields - a NUL left by a fixed-width dump padding a customer name, for
+    instance. openpyxl rejects those on assignment with `IllegalCharacterError`,
+    which used to abort the whole run at export time over one unprintable byte
+    in one detail-sheet cell.
+
+    Dropping them is lossless for the reader: they have no glyph, so the cell
+    renders identically once they are gone. Only `str` values are touched, so
+    numbers, dates, and `None` pass through untouched and keep their types.
+    """
+    if isinstance(value, str):
+        return ILLEGAL_CHARACTERS_RE.sub("", value)
+    return value
 
 
 class ExcelReportExporter:
@@ -219,7 +245,9 @@ class ExcelReportExporter:
             row = ws.max_row + 1 if ws.max_row > 1 or ws["A1"].value else ws.max_row
             ws.cell(row=row, column=1, value=label).font = _TOTAL_FONT
             ws.cell(row=row, column=1).fill = _META_FILL
-            ws.cell(row=row, column=2, value=value).fill = _META_FILL
+            ws.cell(row=row, column=2, value=sanitize_cell_value(value)).fill = (
+                _META_FILL
+            )
         ws["A1"].font = Font(bold=True, size=14, color="1F4E79")
 
         header_row = ws.max_row + 2
@@ -227,7 +255,7 @@ class ExcelReportExporter:
 
         # --- Column headers ---
         for col_idx, name in enumerate(headers, start=1):
-            cell = ws.cell(row=header_row, column=col_idx, value=name)
+            cell = ws.cell(row=header_row, column=col_idx, value=sanitize_cell_value(name))
             cell.font = _HEADER_FONT
             cell.fill = _HEADER_FILL
             cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -238,9 +266,11 @@ class ExcelReportExporter:
         col_totals = {cat: 0 for cat in category_columns}
         for r_offset, (_, record) in enumerate(crosstab_df.iterrows()):
             excel_row = first_data_row + r_offset
-            ws.cell(row=excel_row, column=1, value=record[row_label_header]).border = (
-                _BORDER
-            )
+            ws.cell(
+                row=excel_row,
+                column=1,
+                value=sanitize_cell_value(record[row_label_header]),
+            ).border = _BORDER
             row_total = 0
             for c_offset, cat in enumerate(category_columns, start=2):
                 count = int(record[cat])
@@ -293,7 +323,9 @@ class ExcelReportExporter:
             row = ws.max_row + 1 if ws.max_row > 1 or ws["A1"].value else ws.max_row
             ws.cell(row=row, column=1, value=label).font = _TOTAL_FONT
             ws.cell(row=row, column=1).fill = _META_FILL
-            ws.cell(row=row, column=2, value=value).fill = _META_FILL
+            ws.cell(row=row, column=2, value=sanitize_cell_value(value)).fill = (
+                _META_FILL
+            )
         title_cell = ws["A1"]
         title_cell.font = Font(bold=True, size=14, color="1F4E79")
 
@@ -303,7 +335,9 @@ class ExcelReportExporter:
         # --- Column headers (with optional display-name overrides) ---
         for col_idx, col_name in enumerate(columns, start=1):
             header_text = self.display_names.get(col_name, col_name)
-            cell = ws.cell(row=header_row, column=col_idx, value=header_text)
+            cell = ws.cell(
+                row=header_row, column=col_idx, value=sanitize_cell_value(header_text)
+            )
             cell.font = _HEADER_FONT
             cell.fill = _HEADER_FILL
             cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -321,7 +355,7 @@ class ExcelReportExporter:
                     cell.value = self._numeric_cell_value(value)
                     cell.number_format = self.number_format
                 else:
-                    cell.value = value
+                    cell.value = sanitize_cell_value(value)
                 cell.border = _BORDER
 
         # --- Grand Total row (totals every value column) ---
@@ -345,7 +379,7 @@ class ExcelReportExporter:
         """Writes the full row-level audit trail with header styling."""
         columns = list(enriched_df.columns)
         for col_idx, col_name in enumerate(columns, start=1):
-            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell = ws.cell(row=1, column=col_idx, value=sanitize_cell_value(col_name))
             cell.font = _HEADER_FONT
             cell.fill = _HEADER_FILL
             cell.alignment = Alignment(horizontal="center")
@@ -363,7 +397,7 @@ class ExcelReportExporter:
                     cell.value = self._numeric_cell_value(value)
                     cell.number_format = self.number_format
                 else:
-                    cell.value = value
+                    cell.value = sanitize_cell_value(value)
 
         self._auto_fit_columns(ws)
         ws.freeze_panes = "A2"

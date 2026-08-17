@@ -123,7 +123,7 @@ OPERATOR_SEQUENCE_LABELS = [
     "Report Data Statis",
     "Rincian Vol TF",
     "Rincian Portal BG",
-    "Time Series FBI Briva",
+    "Report Vol Briva",
     "Report Giro",
 ]
 
@@ -148,7 +148,7 @@ def test_gui_dropdown_labels_map_to_unchanged_ids():
         "Report Data Statis": "report-data-statis",
         "Rincian Vol TF": "rincian-vol-tf",
         "Rincian Portal BG": "rincian-portal-bg",
-        "Time Series FBI Briva": "timeseries-fbi-briva",
+        "Report Vol Briva": "timeseries-fbi-briva",
         "Report Giro": "report-giro",
     }
 
@@ -212,7 +212,7 @@ def test_aggregation_excludes_wholesale_case_insensitive():
 
 
 # --------------------------------------------------------------------------- #
-# Count aggregation + KAWIL inclusion (unit)
+# Count aggregation + regional KW inclusion (unit)
 # --------------------------------------------------------------------------- #
 def _count_frame() -> pd.DataFrame:
     """MC10 has P1, P1, P2 and a blank ID; MC20 has one ID."""
@@ -274,49 +274,49 @@ def test_count_aggregation_drops_korporasi_and_keeps_blank_segmen():
     assert result.total_volume_idr == 4.0
 
 
-def test_kawil_include_keeps_only_matching_region_any_case():
+def test_regional_kw_include_keeps_only_matching_region_any_case():
     df = pd.DataFrame(
         {
-            "KAWIL": ["KANWIL MALANG", " kanwil malang ", "KANWIL SURABAYA", ""],
+            "KW": ["KANWIL MALANG", " kanwil malang ", "KANWIL SURABAYA", ""],
             "MAIN_CODE": ["MC10"] * 4,
             "MAIN_BRANCH": ["One"] * 4,
             "ID_PRODUCT": ["P1", "P2", "P3", "P4"],
         }
     )
-    result = AggregationEngine(kawil_include="KANWIL MALANG").aggregate(
+    result = AggregationEngine(kw_include=["KANWIL MALANG"]).aggregate(
         df, value_col="ID_PRODUCT", aggfunc="count"
     )
-    # Surabaya and the blank KAWIL row are both excluded.
+    # Surabaya and the blank KW row are both excluded.
     assert result.total_volume_idr == 2.0
 
 
-def test_kawil_include_and_exclude_segmen_combine_with_and():
+def test_regional_kw_include_and_exclude_segmen_combine_with_and():
     df = pd.DataFrame(
         {
             "SEGMEN": ["KORPORASI", "Consumer", "Consumer"],
-            "KAWIL": ["KANWIL MALANG", "KANWIL MALANG", "KANWIL SURABAYA"],
+            "KW": ["KANWIL MALANG", "KANWIL MALANG", "KANWIL SURABAYA"],
             "MAIN_CODE": ["MC10"] * 3,
             "MAIN_BRANCH": ["One"] * 3,
             "ID_PRODUCT": ["P1", "P2", "P3"],
         }
     )
     result = AggregationEngine(
-        exclude_segmen=["KORPORASI"], kawil_include="KANWIL MALANG"
+        exclude_segmen=["KORPORASI"], kw_include=["KANWIL MALANG"]
     ).aggregate(df, value_col="ID_PRODUCT", aggfunc="count")
     # Only the Consumer + Malang row survives both filters.
     assert result.total_volume_idr == 1.0
 
 
-def test_kawil_include_filtering_everything_out_returns_empty_summary():
+def test_regional_kw_include_filtering_everything_out_returns_empty_summary():
     df = pd.DataFrame(
         {
-            "KAWIL": ["KANWIL SURABAYA"],
+            "KW": ["KANWIL SURABAYA"],
             "MAIN_CODE": ["MC10"],
             "MAIN_BRANCH": ["One"],
             "ID_PRODUCT": ["P1"],
         }
     )
-    result = AggregationEngine(kawil_include="KANWIL MALANG").aggregate(
+    result = AggregationEngine(kw_include=["KANWIL MALANG"]).aggregate(
         df, value_col="ID_PRODUCT", aggfunc="count"
     )
     assert result.branch_count == 0
@@ -436,7 +436,7 @@ def test_report_data_statis_counts_id_product(
     rows = _statis_summary_rows(ws)
     # MC10: P1, P1, P2 count (duplicates count separately, blank ID does not).
     assert rows[("MC10", "Jakarta Pusat")].value == 3
-    # MC20: KANWIL SURABAYA and blank-KAWIL rows dropped, leaving one.
+    # MC20: KANWIL SURABAYA and blank-KW rows dropped, leaving one.
     assert rows[("MC20", "Surabaya")].value == 1
     # 0009 has no reference row but still survives the filters.
     assert rows[("UNMAPPED", "UNMAPPED")].value == 1
@@ -520,14 +520,72 @@ def test_report_data_statis_definition_bakes_its_filters():
     assert definition.aggfunc == "count"
     assert definition.value_col == "ID_PRODUCT"
     assert definition.exclude_segmen == ("KORPORASI",)
-    assert definition.kawil_include == "KANWIL MALANG"
     assert definition.number_format == "0"
     # KORPORASI is the default exclusion, but the operator may override it.
     assert definition.supports_segment_filter is True
-    # KAWIL stays definition-baked - it is not an operator control.
-    assert definition.kawil_include == "KANWIL MALANG"
+    # The region is a KW keep-list, not a dimension of its own, and it is an
+    # operator control like every other filter.
+    assert definition.kw_include == ("KANWIL MALANG",)
+    assert definition.has_kw_filter is True
+    assert not hasattr(definition, "kawil_include")
+    # The region column is the extract's own `KW`, never a `KAWIL` header.
+    assert "KW" in definition.required_columns
+    assert "KAWIL" not in definition.required_columns
     # ID_PRODUCT must never be coerced to a number by ingestion.
     assert "ID_PRODUCT" not in definition.numeric_columns
+
+
+def test_report_data_statis_reads_the_region_from_the_kw_column(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    """Regression: a real extract spells the region `KW`, and used to fail
+    validation demanding an absent `KAWIL` column."""
+    out = tmp_path / "data_statis_kw.xlsx"
+    report = _run_data_statis(report_data_statis_bin_file, reference_file, out)
+
+    assert report.success is True, report.error_message
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # KANWIL SURABAYA and blank-KW rows are still dropped, so the KW keep-list
+    # really ran rather than silently passing every region through.
+    assert rows[("MC20", "Surabaya")].value == 1
+
+
+def test_report_data_statis_fails_loudly_without_a_kw_column(
+    reference_file, tmp_path
+):
+    """No region column at all must stop the run, not quietly report every region."""
+    raw = tmp_path / "no_kw.bin"
+    raw.write_text(
+        "KODE_UNIT|SEGMEN|ID_PRODUCT\n0001|Consumer|P1\n", encoding="utf-8"
+    )
+    report = _run_data_statis(raw, reference_file, tmp_path / "no_kw.xlsx")
+
+    assert report.success is False
+    assert "KW" in (report.error_message or "")
+
+
+def test_report_data_statis_kw_box_overrides_the_default_region(
+    report_data_statis_bin_file, reference_file, tmp_path
+):
+    """A typed KW keep-list replaces KANWIL MALANG for that run."""
+    out = tmp_path / "data_statis_surabaya.xlsx"
+    config = ProcessingConfig(
+        raw_data_path=report_data_statis_bin_file,
+        reference_data_path=reference_file,
+        workflow_id="report-data-statis",
+        output_report_path=out,
+        kw_include=["KANWIL SURABAYA"],
+    )
+    report = PipelineOrchestrator.execute(config)
+
+    assert report.success is True, report.error_message
+    rows = _statis_summary_rows(load_workbook(out)["Summary_Report"])
+    # Only the single Surabaya row survives; the Malang rows are now filtered out.
+    assert {k: c.value for k, c in rows.items()} == {("MC20", "Surabaya"): 1}
+
+
+def test_report_data_statis_kw_hint_states_the_default_region():
+    assert filter_hint_text("report-data-statis", "KW") == "auto: keeps KANWIL MALANG"
 
 
 def test_report_data_statis_enriches_on_kode_unit_alias(
@@ -1214,7 +1272,7 @@ def test_master_enricher_integration_live_like_master_qlola(
 
 
 # --------------------------------------------------------------------------- #
-# Time Series FBI Briva
+# Report Vol Briva (timeseries-fbi-briva)
 # --------------------------------------------------------------------------- #
 def test_briva_nonwholesale_volume_matches_sample_grand_total(
     timeseries_briva_file, reference_file, tmp_path
@@ -1912,9 +1970,12 @@ def test_gui_workflow_defaults_back_the_filter_hints():
     # Report Giro's fields are live - it just drops nothing by default.
     assert default_segmen_exclude_text("report-giro") == ""
     assert default_segmen_include_text("report-giro") == ""
-    # No workflow bakes in a KW keep-list yet; the dimension is operator-only.
+    # Report Data Statis is the only workflow that bakes in a KW keep-list: its
+    # regional cut. Everywhere else the dimension is operator-only.
+    assert default_kw_text("report-data-statis") == "KANWIL MALANG"
     for workflow_id in WorkflowId:
-        assert default_kw_text(workflow_id) == ""
+        if workflow_id is not WorkflowId.REPORT_DATA_STATIS:
+            assert default_kw_text(workflow_id) == ""
 
 
 @pytest.mark.parametrize(

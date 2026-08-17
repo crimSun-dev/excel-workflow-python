@@ -1,6 +1,6 @@
 """Aggregation Engine (TDD Section 3.4).
 
-Replicates Excel's PivotTable: optionally filters by SEGMEN, KW and KAWIL,
+Replicates Excel's PivotTable: optionally filters by SEGMEN, SOURCE and KW,
 groups by [MAIN_CODE, MAIN_BRANCH], and sums (or counts) the value column.
 Subtotals are intentionally suppressed (matching the tabular-form, no-subtotal
 layout in the source workflow); only a single Grand Total is computed separately
@@ -23,12 +23,13 @@ from .enrichment import resolve_alias_column
 from .schemas import AggregationResult
 
 SEGMEN_COLUMN = "SEGMEN"
-KAWIL_COLUMN = "KAWIL"
 SOURCE_COLUMN = "SOURCE"
 
-# KW is the stakeholder's label for the product/regional dimension; the physical
-# header differs per extract, so the control resolves the first alias present
-# (and stays a no-op when the source carries none of them).
+# KW is the stakeholder's label for the product/regional dimension, and `KW` is
+# the header real extracts carry - it is the one operator-facing name for it, so
+# regional values such as "KANWIL MALANG" are matched here rather than through a
+# second KAWIL dimension. The remaining spellings stay as ranked fallbacks for
+# older extracts; the control is a no-op when the source carries none of them.
 KW_COLUMN_ALIASES = ["KW", "PRODUCT", "GROUP_PRODUCT", "KAWIL"]
 
 # One value, a list of values, or nothing at all - the GUI hands over a
@@ -122,21 +123,17 @@ class AggregationEngine:
         self,
         segment_filter: FilterValues = None,
         exclude_segmen: Optional[list[str]] = None,
-        kawil_include: Optional[str] = None,
         kw_include: FilterValues = None,
     ):
         self.segment_filter = segment_filter
         # SEGMEN values to drop before grouping (e.g. Rincian Vol TF excludes
         # "Wholesale"). Operates independently of the inclusion filter above.
         self.exclude_segmen = exclude_segmen or []
-        # Regional-office (KAWIL) inclusion filter, e.g. Report Data Statis keeps
-        # only "KANWIL MALANG". Deliberately a separate knob from the SEGMEN
-        # filters so the two column dimensions can never be conflated; it is
-        # AND-combined with them.
-        self.kawil_include = kawil_include
         # Operator-facing KW keep-list, resolved by header alias and AND-combined
-        # with the filters above. Its own knob for the same reason as KAWIL:
-        # dimensions never share a flag.
+        # with the SEGMEN filters above. Its own knob so the two column
+        # dimensions can never be conflated. Regional keep-lists live here too
+        # (Report Data Statis keeps only "KANWIL MALANG"): KW is the single
+        # dimension for that column, not a separate KAWIL filter.
         self.kw_include = kw_include
 
     def aggregate(
@@ -181,14 +178,11 @@ class AggregationEngine:
         # backs the GUI fields and every definition-baked default.
         df = apply_segmen_filters(df, self.segment_filter, self.exclude_segmen)
 
-        # Apply the optional KAWIL inclusion filter (case-insensitive, trimmed).
-        # Blank/null KAWIL never matches, so those rows are dropped - the
-        # opposite of the SEGMEN exclusion above, which retains them.
-        df = apply_column_filters(df, [KAWIL_COLUMN], self.kawil_include)
-
-        # Apply the operator's KW keep-list. Resolved by alias and skipped
-        # entirely when the source carries no KW-like column, so a filter typed
-        # against an extract that has no such dimension can never fail a run.
+        # Apply the KW keep-list (case-insensitive, trimmed). Resolved by alias
+        # and skipped entirely when the source carries no KW-like column, so a
+        # filter typed against an extract without that dimension can never fail
+        # a run. Blank/null KW never matches an inclusion, so those rows drop -
+        # the opposite of the SEGMEN exclusion above, which retains them.
         df = apply_kw_filters(df, self.kw_include)
 
         missing = [c for c in value_cols if c not in df.columns]

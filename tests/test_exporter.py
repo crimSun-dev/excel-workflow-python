@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from openpyxl import load_workbook
 
-from src.exporter import ExcelReportExporter
+from src.exporter import ExcelReportExporter, sanitize_cell_value
 
 
 @pytest.fixture
@@ -95,3 +95,67 @@ def test_exporter_auto_adjusts_column_widths(summary_df, enriched_df, tmp_path):
     # At least one column width was explicitly set (> default of None/8.43).
     widths = [dim.width for dim in ws.column_dimensions.values() if dim.width]
     assert widths and max(widths) > 10
+
+
+# --------------------------------------------------------------------------- #
+# Illegal control characters in raw extract text
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("MUHAMMAD ZAPA AL AS\x00", "MUHAMMAD ZAPA AL AS"),
+        ("A\x01B\x1fC", "ABC"),
+        ("already clean", "already clean"),
+        # Tab / newline / carriage return are legal in xlsx and must survive.
+        ("line1\nline2\tend\r", "line1\nline2\tend\r"),
+    ],
+)
+def test_sanitize_cell_value_strips_only_illegal_characters(raw, expected):
+    assert sanitize_cell_value(raw) == expected
+
+
+@pytest.mark.parametrize("value", [None, 42, 3.5, True])
+def test_sanitize_cell_value_passes_non_strings_through_unchanged(value):
+    assert sanitize_cell_value(value) is value
+
+
+def test_exporter_writes_rows_containing_control_characters(summary_df, tmp_path):
+    """Regression: one stray NUL in a customer name aborted the whole export."""
+    enriched = pd.DataFrame(
+        {
+            "KODE_UKER": ["0001"],
+            "NAMA_REK_SIMPANAN": ["MUHAMMAD ZAPA AL AS\x00"],
+            "VOLUME_IN_IDR": [1000.0],
+            "MAIN_CODE": ["MC10"],
+            "MAIN_BRANCH": ["Jakarta Pusat"],
+        }
+    )
+    out = tmp_path / "control_chars.xlsx"
+    ExcelReportExporter().export(summary_df, enriched, out)
+
+    ws = load_workbook(out)["Enriched_Data"]
+    names = [c.value for row in ws.iter_rows(min_row=2) for c in row]
+    assert "MUHAMMAD ZAPA AL AS" in names
+
+
+def test_exporter_cleans_control_characters_in_headers_and_summary(tmp_path):
+    """The junk byte can land in a header or a branch name, not just a detail row."""
+    summary = pd.DataFrame(
+        {
+            "MAIN_CODE": ["MC10"],
+            "MAIN_BRANCH": ["Surabaya\x00"],
+            "VOLUME_IN_IDR": [1000.0],
+        }
+    )
+    enriched = pd.DataFrame({"NAMA\x00": ["value\x01"], "VOLUME_IN_IDR": [1000.0]})
+    out = tmp_path / "control_chars_headers.xlsx"
+    ExcelReportExporter().export(summary, enriched, out)
+
+    workbook = load_workbook(out)
+    summary_values = [
+        c.value for row in workbook["Summary_Report"].iter_rows() for c in row
+    ]
+    assert "Surabaya" in summary_values
+    detail = workbook["Enriched_Data"]
+    assert detail.cell(row=1, column=1).value == "NAMA"
+    assert detail.cell(row=2, column=1).value == "value"

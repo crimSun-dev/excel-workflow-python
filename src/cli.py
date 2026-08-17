@@ -115,8 +115,9 @@ def process(
         None,
         "--kw",
         help="Comma-separated KW keep-list (keep only these). Omit to use the "
-        "workflow default; pass an empty string to keep every KW. A no-op when "
-        "the source has no KW/PRODUCT/GROUP_PRODUCT/KAWIL column",
+        "workflow default (Report Data Statis keeps 'KANWIL MALANG'); pass an "
+        "empty string to keep every KW. A no-op when the source has no "
+        "KW/PRODUCT/GROUP_PRODUCT/KAWIL column",
     ),
     delimiter: str = typer.Option("|", "--delimiter", "-d", help="Raw file delimiter"),
     interactive: bool = typer.Option(

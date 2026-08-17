@@ -47,10 +47,10 @@ else, so the selector, the CLI listing, and this table cannot drift apart.
 |---|---|---|---|---|---|---|
 | 1 | Report Summary Akumulasi (`akumulasi`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | Sum of `FBI`, Sum of `VOLUME_IN_IDR` | None | `0` |
 | 2 | Time Series Active User Qlola (`timeseries-active-user-qlola`) | **Required** (plus `--master`) | `MAIN_CODE` × `USER_AKTIF` crosstab | **Count** of distinct `ID`, active at `FREKUENSI` ≥ 5 | None (excludes `SOURCE` = `CMS`) | `0` |
-| 3 | Report Data Statis (`report-data-statis`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | **Count** of `ID_PRODUCT` | Excludes `KORPORASI` (blank kept); also keeps only `KAWIL` = `KANWIL MALANG` | `0` |
+| 3 | Report Data Statis (`report-data-statis`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | **Count** of `ID_PRODUCT` | Excludes `KORPORASI` (blank kept); also keeps only `KW` = `KANWIL MALANG` | `0` |
 | 4 | Rincian Vol TF (`rincian-vol-tf`) | Not used | `MAINBR`, `MBDESC` | Sum of `AMOUNT_IN_IDR` | Excludes `Wholesale` (blank kept) | `0` |
 | 5 | Rincian Portal BG (`rincian-portal-bg`) | Not used | `MAINBR`, `MBNAME` | Sum of `AMOUNT_IN_IDR` | None | `0` |
-| 6 | Time Series FBI Briva (`timeseries-fbi-briva`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | Sum of `VOLUME_IDR` (rounded up) | Keeps only `NONWHOLESALE` | `0` |
+| 6 | Report Vol Briva (`timeseries-fbi-briva`) | **Required** | `MAIN_CODE`, `MAIN_BRANCH` | Sum of `VOLUME_IDR` (rounded up) | Keeps only `NONWHOLESALE` | `0` |
 | 7 | Report Giro (`report-giro`) | Not used (needs `--master`) | n/a — fills the master's `SALDO UPDATE` | Copies monthly `SALDO IDR` per account | None (skips `JENIS` = `Deposito`) | `0` |
 
 The SEGMEN rule above is only each workflow's **default**. Every workflow
@@ -142,7 +142,7 @@ written — the warning means "check the master-data file you picked", not
 
 **2. Briva totals keep their cents.**
 
-The Time Series FBI Briva Grand Total is stored unrounded with the `#,##0.00`
+The Report Vol Briva Grand Total is stored unrounded with the `#,##0.00`
 format — e.g. `2,481,517,421,603.75`. An operator who rounds the same figure in
 Excel sees `…604`, because `ROUND(2481517421603.75, 0)` rounds the `.75` up. The
 one-unit gap is the rounding, not a different sum. The software deliberately
@@ -206,7 +206,7 @@ The GUI contract is one rule, applied to all three boxes:
 |---|---|---|
 | `SEGMENT` | The workflow's baked rule runs (drop `KORPORASI`, keep `NONWHOLESALE`, …) | Keep **only** the listed segments; the baked rule is replaced for that run |
 | `SOURCE` | The workflow's baked rule runs (Qlola drops `CMS`) | Keep **only** the listed `SOURCE` values |
-| `KW` | No `KW` filtering | Keep **only** the listed `KW` values |
+| `KW` | The workflow's baked rule runs (Report Data Statis keeps `KANWIL MALANG`); no `KW` filtering elsewhere | Keep **only** the listed `KW` values |
 
 Boxes are never pre-filled, because a filled box reads as something the operator
 must manage and clearing it would read as "remove all filters". Instead each box
@@ -214,7 +214,8 @@ carries a hint (`auto: drops KORPORASI`) stating what the empty state does.
 
 Every filter is case-insensitive and trimmed, they are AND-combined, and each is
 a **no-op when the extract has no such column** — `KW` is resolved against the
-`KW`, `PRODUCT`, `GROUP_PRODUCT`, `KAWIL` header aliases. Blank/null cells never
+`KW` header first, then the `PRODUCT`, `GROUP_PRODUCT`, `KAWIL` fallback aliases
+for older extracts. Blank/null cells never
 match an exclusion, so they survive it. Internally, inclusion and exclusion
 remain separate fields (`segmen_include`, `exclude_segmen`, `source_exclude`,
 `kw_include`) — there is no single filter with a negation flag.
@@ -224,8 +225,10 @@ in the `SEGMENT` box (or pass `--exclude-segmen ""` headlessly); leaving the box
 empty keeps dropping `KORPORASI` exactly as before. The Summary sheet's
 **Filter Applied** line always states the filters that run actually used.
 
-`KAWIL` is deliberately not an operator control: Report Data Statis always keeps
-only `KANWIL MALANG`.
+The regional cut is part of the `KW` dimension, not a separate control: Report
+Data Statis reads the region from the extract's `KW` column and keeps only
+`KANWIL MALANG` when the box is empty. Type another region (or
+`--kw "KANWIL SURABAYA"`) to cut a different one for a single run.
 
 ### GUI (no arguments)
 
@@ -281,13 +284,13 @@ B01|Branch One|1000
 B02|Branch Two|500
 ```
 
-**Report Data Statis** (`KODE_UNIT`, `SEGMEN`, `KAWIL`, `ID_PRODUCT`; commonly a
+**Report Data Statis** (`KODE_UNIT`, `SEGMEN`, `KW`, `ID_PRODUCT`; commonly a
 `.bin` extract, which is read as plain delimited text). `SEGMEN` = `KORPORASI`
-rows are dropped (blank `SEGMEN` kept), only `KAWIL` = `KANWIL MALANG` rows are
+rows are dropped (blank `SEGMEN` kept), only `KW` = `KANWIL MALANG` rows are
 kept, and the summary is the **Count** of non-blank `ID_PRODUCT` per branch:
 
 ```
-KODE_UNIT|SEGMEN|KAWIL|ID_PRODUCT
+KODE_UNIT|SEGMEN|KW|ID_PRODUCT
 0001|Consumer|KANWIL MALANG|P1
 0001|KORPORASI|KANWIL MALANG|P2
 0002|Micro|KANWIL SURABAYA|P3

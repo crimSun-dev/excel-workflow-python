@@ -2,14 +2,17 @@
 
 Ingests raw pipe-delimited data (commonly a `.bin` export, which is plain
 delimited text), enriches the unit code against a mapping workbook (VLOOKUP),
-drops SEGMEN `KORPORASI`, keeps only KAWIL `KANWIL MALANG`, then reports the
+drops SEGMEN `KORPORASI`, keeps only KW `KANWIL MALANG`, then reports the
 Excel PivotTable **Count of ID_PRODUCT** by MAIN_CODE + MAIN_BRANCH.
 
-The KORPORASI exclusion is the default the operator gets for free, but it stays
-editable in the GUI/CLI (matching the manual pivot, where unchecking segments is
-a per-run decision). The KAWIL filter is definition-baked. `aggfunc="count"`
-keeps the textual ID_PRODUCT column out of the money-summing path. Everything
-else runs on the shared ingest -> enrich -> aggregate -> export template.
+The region lives in the extract's `KW` column, so it is filtered through the one
+operator-facing KW dimension rather than a separate KAWIL flag - only the *value*
+is regional ("KANWIL MALANG"). Both that and the KORPORASI exclusion are the
+defaults the operator gets for free, and both stay editable in the GUI/CLI
+(matching the manual pivot, where unticking values is a per-run decision).
+`aggfunc="count"` keeps the textual ID_PRODUCT column out of the money-summing
+path. Everything else runs on the shared ingest -> enrich -> aggregate -> export
+template.
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ REPORT_DATA_STATIS_DEFINITION = WorkflowDefinition(
     # ID_PRODUCT is a discrete identifier, never a monetary amount, so it is
     # deliberately absent from numeric_columns - coercing it would destroy
     # non-numeric IDs and turn the Count into a Sum of nonsense.
-    required_columns=("SEGMEN", "KAWIL", "ID_PRODUCT"),
+    required_columns=("SEGMEN", "KW", "ID_PRODUCT"),
     aggfunc="count",
     exclude_segmen=("KORPORASI",),
     # KORPORASI is only the *default* exclusion: the operator can add segments or
@@ -45,7 +48,8 @@ REPORT_DATA_STATIS_DEFINITION = WorkflowDefinition(
     supports_segment_filter=True,
     has_source_filter=True,
     has_kw_filter=True,
-    kawil_include="KANWIL MALANG",
+    # The regional cut is a KW keep-list, not a KAWIL dimension of its own.
+    kw_include=("KANWIL MALANG",),
     value_display_names=(("ID_PRODUCT", "Count of ID_PRODUCT"),),
 )
 

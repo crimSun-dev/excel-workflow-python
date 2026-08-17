@@ -1,4 +1,4 @@
-"""Time Series FBI Briva workflow.
+"""Report Vol Briva workflow.
 
 Ingests raw pipe-delimited BRIVA data, enriches it against a UKER reference
 workbook (VLOOKUP), keeps only NONWHOLESALE rows, then aggregates by
@@ -25,11 +25,11 @@ from .base import (
 
 TIMESERIES_FBI_BRIVA_DEFINITION = WorkflowDefinition(
     workflow_id=WorkflowId.TIMESERIES_FBI_BRIVA,
-    label="Time Series FBI Briva",
+    label="Report Vol Briva",
     requires_reference=True,
     group_cols=("MAIN_CODE", "MAIN_BRANCH"),
     value_col="VOLUME_IDR",
-    report_title="Time Series FBI Briva Report",
+    report_title="Report Vol Briva",
     detail_sheet_name="Enriched_Data",
     numeric_rounding="ceil",
     numeric_columns=("VOLUME_IDR",),
@@ -56,7 +56,7 @@ class TimeSeriesFbiBrivaStrategy(WorkflowStrategy):
     ) -> tuple[pd.DataFrame, int]:
         if config.reference_data_path is None:
             raise WorkflowValidationError(
-                "The 'Time Series FBI Briva' workflow requires a reference "
+                "The 'Report Vol Briva' workflow requires a reference "
                 "mapping file, but none was provided."
             )
         # Briva exports spell the branch code as `KODE UKER`, `KODE_UKER` or

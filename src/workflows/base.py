@@ -104,11 +104,6 @@ class WorkflowDefinition:
     # the `exclude_segmen` exclusion list so inclusion vs exclusion never share
     # a flag.
     segmen_include: str | None = None
-    # Definition-baked KAWIL (regional office) inclusion filter, e.g. Report Data
-    # Statis keeps only "KANWIL MALANG". Deliberately separate from the SEGMEN
-    # fields above so region and segment filtering never share a flag; the two
-    # are AND-combined by the aggregator.
-    kawil_include: str | None = None
     # How the value columns are aggregated: "sum" totals them (all money
     # workflows), "count" reproduces Excel's Count of non-blank cells (Report
     # Data Statis counts ID_PRODUCT, which is textual and must never be summed).
@@ -122,9 +117,12 @@ class WorkflowDefinition:
     # SOURCE field only for workflows declaring True; all others grey it out and
     # ignore any value it holds).
     has_source_filter: bool = False
-    # Definition-baked KW keep-list (empty = keep every KW). KW is resolved by
-    # header alias, so the same control serves extracts that spell the dimension
-    # KW, PRODUCT, GROUP_PRODUCT or KAWIL, and is a no-op where none exist.
+    # Definition-baked KW keep-list (empty = keep every KW), e.g. Report Data
+    # Statis keeps only "KANWIL MALANG". Regional filtering is part of this one
+    # KW dimension rather than a second KAWIL flag, because `KW` is the column
+    # real extracts carry. Resolved by header alias, so the same control serves
+    # older extracts spelling it PRODUCT, GROUP_PRODUCT or KAWIL, and is a no-op
+    # where none exist.
     kw_include: tuple[str, ...] = ()
     # Whether this workflow exposes the KW filter control, mirroring
     # `has_source_filter`: False greys the field out and discards its value.
@@ -221,7 +219,6 @@ class WorkflowStrategy(ABC):
         aggregator = AggregationEngine(
             segment_filter=self.resolve_segment_filter(config),
             exclude_segmen=self.resolve_segmen_exclude(config),
-            kawil_include=definition.kawil_include,
             kw_include=self.resolve_kw_include(config),
         )
         aggregated = aggregator.aggregate(
@@ -374,10 +371,8 @@ class WorkflowStrategy(ABC):
         segmen_exclude = self.resolve_segmen_exclude(config)
         if segmen_exclude:
             parts.append(f"{', '.join(segmen_exclude)} (excluded)")
-        # KAWIL, SOURCE and KW are reported alongside the SEGMEN rules so the
-        # metadata block never understates what was filtered out.
-        if self.definition.kawil_include:
-            parts.append(f"KAWIL {self.definition.kawil_include} (only)")
+        # SOURCE and KW are reported alongside the SEGMEN rules so the metadata
+        # block never understates what was filtered out.
         source_include = self.resolve_source_include(config)
         if source_include:
             parts.append(f"{', '.join(source_include)} (SOURCE only)")

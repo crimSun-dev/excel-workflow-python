@@ -121,7 +121,7 @@ def default_segmen_exclude_text(workflow_id: WorkflowId | str) -> str:
 
 
 def default_kw_text(workflow_id: WorkflowId | str) -> str:
-    """The workflow's default KW keep-list as GUI text (empty for every report today)."""
+    """The workflow's default KW keep-list as GUI text (Data Statis: KANWIL MALANG)."""
     definition = get_definition(workflow_id)
     if not definition.has_kw_filter:
         return ""

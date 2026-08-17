@@ -329,7 +329,7 @@ def rincian_vol_tf_file(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def timeseries_briva_file(tmp_path: Path) -> Path:
-    """Pipe-delimited Time Series FBI Briva sample.
+    """Pipe-delimited Report Vol Briva sample.
 
     Uses the spaced `KODE UKER` header (exercises raw-side alias resolution) and
     a WHOLESALE row that MUST be excluded by the NONWHOLESALE inclusion filter.
@@ -470,7 +470,7 @@ def qlola_master_file(tmp_path: Path) -> Path:
 
 
 DATA_STATIS_CONTENT = (
-    "KODE_UNIT|SEGMEN|KAWIL|ID_PRODUCT\n"
+    "KODE_UNIT|SEGMEN|KW|ID_PRODUCT\n"
     # 0001 -> MC10: P1 twice (duplicates count separately) + P2, plus a blank
     # ID that must not count => Count of ID_PRODUCT = 3.
     "0001|Consumer|KANWIL MALANG|P1\n"
@@ -482,8 +482,8 @@ DATA_STATIS_CONTENT = (
     # Dropped by the definition-baked filters.
     "0001|KORPORASI|KANWIL MALANG|P4\n"    # KORPORASI excluded
     "0001|korporasi|KANWIL MALANG|P5\n"    # case-insensitive exclusion
-    "0002|Consumer|KANWIL SURABAYA|P6\n"   # wrong KAWIL
-    "0002|Consumer||P7\n"                  # blank KAWIL never matches
+    "0002|Consumer|KANWIL SURABAYA|P6\n"   # wrong KW
+    "0002|Consumer||P7\n"                  # blank KW never matches
     # 0009 is absent from the reference => UNMAPPED, still counted (1).
     "0009|Consumer|KANWIL MALANG|P8\n"
 )

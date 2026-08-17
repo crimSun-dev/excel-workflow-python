@@ -26,7 +26,7 @@ class ProcessingConfig(BaseModel):
     reference_data_path: Optional[Path] = Field(
         default=None,
         description="Path to reference mapping Excel/CSV file "
-        "(required for Akumulasi, Time Series FBI Briva, Qlola, and Report Data "
+        "(required for Akumulasi, Report Vol Briva, Qlola, and Report Data "
         "Statis workflows)",
     )
     master_data_path: Optional[Path] = Field(
@@ -79,8 +79,9 @@ class ProcessingConfig(BaseModel):
     kw_include: Optional[list[str]] = Field(
         default=None,
         description="Runtime override for the workflow's KW keep-list. None "
-        "keeps the workflow definition's default; an empty list keeps every KW. "
-        "The KW column is resolved by header alias (KW, PRODUCT, GROUP_PRODUCT, "
+        "keeps the workflow definition's default (e.g. ['KANWIL MALANG'] for "
+        "Report Data Statis); an empty list keeps every KW. The KW column is "
+        "resolved by header alias (KW first, then PRODUCT, GROUP_PRODUCT, "
         "KAWIL) and the filter is a no-op when none is present. Ignored by "
         "workflows that do not declare has_kw_filter",
     )
