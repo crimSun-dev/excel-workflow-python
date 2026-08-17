@@ -774,25 +774,85 @@ def test_giro_preserves_other_sheets_and_headers(giro_output):
     assert workbook["Catatan"]["A1"].value == "Catatan operator"
     assert workbook["Catatan"]["A2"].value == "Jangan dihapus"
     headers = [ws.cell(GIRO_HEADER_ROW, c).value for c in range(1, 5)]
-    # The target contract is the month-neutral SALDO UPDATE, never SALDO JUNI.
+    # Canonical masters keep the month-neutral SALDO UPDATE header.
     assert headers == ["NO REK", "JENIS", "SALDO", "SALDO UPDATE"]
 
 
-def test_giro_month_named_target_column_is_not_the_contract(
-    giro_monthly_file, tmp_path
-):
-    """A master offering only SALDO JUNI fails loudly rather than being written."""
+def _write_giro_master(path: Path, headers: list[str], rows: list[list[object]]) -> Path:
     from openpyxl import Workbook
 
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "DAFTAR GIRO"
-    sheet.append(["NO REK", "JENIS", "SALDO", "SALDO JUNI"])
-    sheet.append(["1234567890", "Giro", 1000, None])
-    master = tmp_path / "giro_master_juni.xlsx"
-    workbook.save(master)
+    sheet.append(headers)
+    for row in rows:
+        sheet.append(row)
+    workbook.save(path)
+    return path
 
+
+def test_giro_month_named_saldo_juni_is_accepted_as_fallback(
+    giro_monthly_file, tmp_path
+):
+    """Operational masters still ship SALDO JUNI instead of SALDO UPDATE."""
+    master = _write_giro_master(
+        tmp_path / "giro_master_juni.xlsx",
+        ["JENIS", "NO REK", "PRODUK", "OPEN DATE", "SALDO", "SALDO JUNI"],
+        [["Giro", "1234567890", "Giro", "2020-01-01", 1000, None]],
+    )
     out = tmp_path / "giro_juni.xlsx"
+    report = _run_giro(giro_monthly_file, master, out)
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(2, 6).value == 2500
+    assert ws.cell(2, 6).number_format == "0"
+    # Historical SALDO is never the write target.
+    assert ws.cell(2, 5).value == 1000
+
+
+def test_giro_month_named_saldo_juli_is_not_hardcoded_to_june(
+    giro_monthly_file, tmp_path
+):
+    master = _write_giro_master(
+        tmp_path / "giro_master_juli.xlsx",
+        ["NO REK", "JENIS", "SALDO", "SALDO JULI"],
+        [["1234567890", "Giro", 1000, None]],
+    )
+    out = tmp_path / "giro_juli.xlsx"
+    report = _run_giro(giro_monthly_file, master, out)
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(2, 4).value == 2500
+    assert ws.cell(2, 3).value == 1000
+
+
+def test_giro_saldo_update_wins_over_a_leftover_month_column(
+    giro_monthly_file, tmp_path
+):
+    master = _write_giro_master(
+        tmp_path / "giro_master_both.xlsx",
+        ["NO REK", "JENIS", "SALDO", "SALDO JUNI", "SALDO UPDATE"],
+        [["1234567890", "Giro", 1000, 88, None]],
+    )
+    out = tmp_path / "giro_both.xlsx"
+    report = _run_giro(giro_monthly_file, master, out)
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(2, 5).value == 2500
+    assert ws.cell(2, 4).value == 88
+    assert ws.cell(2, 3).value == 1000
+
+
+def test_giro_fails_when_only_the_historical_saldo_column_exists(
+    giro_monthly_file, tmp_path
+):
+    """Bare SALDO is historical; it must never be treated as the write target."""
+    master = _write_giro_master(
+        tmp_path / "giro_master_saldo_only.xlsx",
+        ["NO REK", "JENIS", "SALDO"],
+        [["1234567890", "Giro", 1000]],
+    )
+    out = tmp_path / "giro_saldo_only.xlsx"
     report = _run_giro(giro_monthly_file, master, out)
     assert report.success is False
     assert "SALDO UPDATE" in report.error_message

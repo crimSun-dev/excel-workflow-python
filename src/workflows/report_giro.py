@@ -2,7 +2,8 @@
 
 Replaces the operator's manual Ctrl+F reconciliation: for every account in the
 Giro master workbook, look up that month's IDR balance in the monthly giro
-source workbook and write it into the target column (`SALDO UPDATE`).
+source workbook and write it into the target column (`SALDO UPDATE`, or a
+month-named column such as `SALDO JUNI` when that is what the master uses).
 
 This workflow does not fit the shared ingest -> aggregate -> export template and
 so overrides `execute()` (the precedent set by Qlola):
@@ -23,6 +24,7 @@ Business rules (see the `workflow-processing` spec):
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -54,6 +56,35 @@ ACCOUNT_ALIASES = [
 ]
 JENIS_ALIASES = ["JENIS", "JENIS REKENING", "TIPE"]
 TARGET_COLUMN_ALIASES = ["SALDO UPDATE", "SALDO_UPDATE"]
+# Operational masters still ship month-named write targets (SALDO JUNI, SALDO
+# JULI, ...). These are a fallback only: SALDO UPDATE wins when both exist, and
+# the bare historical SALDO column is never a match.
+_MONTH_NAMED_SALDO_RE = re.compile(r"^SALDO[_\s]+([A-Z]+)$")
+_MONTH_TOKENS = frozenset(
+    {
+        "JANUARI",
+        "FEBRUARI",
+        "MARET",
+        "APRIL",
+        "MEI",
+        "JUNI",
+        "JULI",
+        "AGUSTUS",
+        "SEPTEMBER",
+        "OKTOBER",
+        "NOVEMBER",
+        "DESEMBER",
+        "JANUARY",
+        "FEBRUARY",
+        "MARCH",
+        "MAY",
+        "JUNE",
+        "JULY",
+        "AUGUST",
+        "OCTOBER",
+        "DECEMBER",
+    }
+)
 MONTHLY_BALANCE_ALIASES = [
     "SALDO IDR",
     "SALDO_IDR",
@@ -248,9 +279,11 @@ class ReportGiroStrategy(WorkflowStrategy):
     def _resolve_master_layout(self, workbook) -> tuple[Worksheet, int, dict[str, int]]:
         """Finds the sheet, header row, and 1-based column indexes to work with.
 
-        The first sheet exposing both an account column and the target
-        `SALDO UPDATE` column wins. Header detection scans the top rows so a title banner above
-        the table does not break resolution, and no column letter is hardcoded.
+        The first sheet exposing both an account column and a write target
+        wins. `SALDO UPDATE` is preferred; a month-named column such as
+        `SALDO JUNI` is accepted when the canonical header is absent. Header
+        detection scans the top rows so a title banner above the table does not
+        break resolution, and no column letter is hardcoded.
         """
         attempts: list[tuple[str, list[str]]] = []
         for worksheet in workbook.worksheets:
@@ -259,7 +292,7 @@ class ReportGiroStrategy(WorkflowStrategy):
                 if not headers:
                     continue
                 account_col = self._alias_index(headers, ACCOUNT_ALIASES)
-                target_col = self._alias_index(headers, TARGET_COLUMN_ALIASES)
+                target_col = self._target_index(headers)
                 if account_col is None or target_col is None:
                     continue
                 return (
@@ -283,7 +316,8 @@ class ReportGiroStrategy(WorkflowStrategy):
             f"Sheets scanned:\n{self._format_attempts(attempts)}\n"
             "Aliases attempted:\n"
             f"  - account: {ACCOUNT_ALIASES}\n"
-            f"  - target : {TARGET_COLUMN_ALIASES}"
+            f"  - target : {TARGET_COLUMN_ALIASES} "
+            "(or a month-named column such as SALDO JUNI / SALDO JULI)"
         )
 
     @staticmethod
@@ -308,6 +342,28 @@ class ReportGiroStrategy(WorkflowStrategy):
             if match is not None:
                 return match
         return None
+
+    def _target_index(self, headers: dict[int, str]) -> int | None:
+        """1-based index of the write-target balance column.
+
+        `SALDO UPDATE` / `SALDO_UPDATE` win when present so a master that has
+        both the canonical header and a leftover month column is not ambiguous.
+        Otherwise the rightmost month-named `SALDO <month>` column is used.
+        The historical `SALDO` column is never returned.
+        """
+        canonical = self._alias_index(headers, TARGET_COLUMN_ALIASES)
+        if canonical is not None:
+            return canonical
+        month_col = None
+        for column, text in headers.items():
+            if self._is_month_named_saldo(normalize_header(text)):
+                month_col = column
+        return month_col
+
+    @staticmethod
+    def _is_month_named_saldo(normalized_header: str) -> bool:
+        match = _MONTH_NAMED_SALDO_RE.fullmatch(normalized_header)
+        return bool(match and match.group(1) in _MONTH_TOKENS)
 
     def _apply_balances(
         self,
