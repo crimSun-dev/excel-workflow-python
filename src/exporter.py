@@ -45,11 +45,27 @@ _BORDER = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN
 # decimal point in the cell format).
 PLAIN_INTEGER_FORMAT = "0"
 
+# Detail-sheet auto-fit samples the header plus this many data rows. Scanning
+# every cell on a national extract is slower than writing the cells themselves.
+DETAIL_AUTOFIT_MAX_ROWS = 200
+
 NumericRounding = Literal["round", "ceil"]
 
 
 class ExportError(Exception):
     """Raised when writing or styling the Excel output file fails."""
+
+
+def _blank_missing(value: object) -> object:
+    """Turns pandas/numpy missing sentinels into empty Excel cells."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        return value
+    return value
 
 
 def sanitize_cell_value(value: object) -> object:
@@ -388,25 +404,28 @@ class ExcelReportExporter:
         value_col_indices = (
             self._value_col_indices(columns) if self.format_detail_values else set()
         )
-        for r_offset, (_, record) in enumerate(enriched_df.iterrows()):
+        for r_offset, values in enumerate(
+            enriched_df.itertuples(index=False, name=None)
+        ):
             excel_row = 2 + r_offset
-            for col_idx, col_name in enumerate(columns, start=1):
-                value = record[col_name]
+            for col_idx, value in enumerate(values, start=1):
                 cell = ws.cell(row=excel_row, column=col_idx)
                 if col_idx in value_col_indices:
                     cell.value = self._numeric_cell_value(value)
                     cell.number_format = self.number_format
                 else:
-                    cell.value = sanitize_cell_value(value)
+                    cell.value = sanitize_cell_value(_blank_missing(value))
 
-        self._auto_fit_columns(ws)
+        sample_rows = min(ws.max_row, 1 + DETAIL_AUTOFIT_MAX_ROWS)
+        self._auto_fit_columns(ws, max_row=sample_rows)
         ws.freeze_panes = "A2"
 
     @staticmethod
-    def _auto_fit_columns(ws: Worksheet) -> None:
+    def _auto_fit_columns(ws: Worksheet, max_row: int | None = None) -> None:
         """Scales column widths dynamically based on the longest cell string."""
         widths: dict[int, int] = {}
-        for row in ws.iter_rows():
+        scan_to = ws.max_row if max_row is None else min(max_row, ws.max_row)
+        for row in ws.iter_rows(max_row=scan_to):
             for cell in row:
                 if cell.value is None:
                     continue

@@ -27,13 +27,14 @@ than the pipe-delimited text labels the other workflows use.
 The small pure helpers below (`source_filter_enabled`, `segment_filter_enabled`,
 `kw_filter_enabled`, `default_source_text`, `default_segmen_include_text`,
 `default_segmen_exclude_text`, `default_kw_text`, `filter_hint_text`,
-`parse_filter_input`, `raw_picker_config`, `master_picker_config`) hold the
-fields' behavior so they are testable without a display server; `launch_gui`
-only wires them to widgets.
+`parse_filter_input`, `raw_picker_config`, `master_picker_config`,
+`format_run_time`) hold the fields' behavior so they are testable without a
+display server; `launch_gui` only wires them to widgets.
 """
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from .branding import PRODUCT_NAME
@@ -193,6 +194,16 @@ def unmapped_warning_text(report: PipelineReport) -> str | None:
     )
 
 
+def format_run_time(report: PipelineReport) -> str:
+    """Wall-clock time plus named stage durations for the success dialog."""
+    lines = [f"Time: {report.execution_time_seconds}s"]
+    timings = report.stage_timings or {}
+    if timings:
+        parts = [f"{name} {seconds:.1f}s" for name, seconds in timings.items()]
+        lines.append("Stages: " + " · ".join(parts))
+    return "\n".join(lines)
+
+
 def launch_gui() -> None:
     """Opens the Tkinter window. Imported lazily so headless CLI use is unaffected."""
     import tkinter as tk
@@ -200,7 +211,7 @@ def launch_gui() -> None:
 
     root = tk.Tk()
     root.title(PRODUCT_NAME)
-    root.geometry("640x600")
+    root.geometry("640x630")
     root.resizable(False, False)
 
     state: dict[str, Path | None] = {
@@ -228,6 +239,7 @@ def launch_gui() -> None:
     seg_hint_var = tk.StringVar(value="")
     source_hint_var = tk.StringVar(value="")
     kw_hint_var = tk.StringVar(value="")
+    status_var = tk.StringVar(value="Ready")
 
     def selected_workflow_id() -> str:
         return choices[workflow_var.get()]
@@ -322,23 +334,48 @@ def launch_gui() -> None:
             source_include=source,
             source_exclude=None if source is None else [],
             kw_include=kw,
+            progress_callback=lambda message: root.after(
+                0, lambda m=message: status_var.set(m)
+            ),
         )
-        report = PipelineOrchestrator.execute(config)
-        if report.success:
-            messagebox.showinfo(
-                "Success",
-                f"Report generated:\n{report.output_path}\n\n"
-                f"Records processed: {report.total_records_processed:,}\n"
-                f"Unmapped records: {report.unmapped_records_count:,}\n"
-                f"Time: {report.execution_time_seconds}s",
-            )
-            # Shown after the success box so the operator cannot miss a join
-            # that silently produced an almost-empty Summary.
-            warning = unmapped_warning_text(report)
-            if warning:
-                messagebox.showwarning("Master ID lookup failed", warning)
-        else:
-            messagebox.showerror("Pipeline failed", report.error_message or "Unknown error")
+        run_button.configure(state="disabled")
+        status_var.set("Starting...")
+
+        def worker() -> None:
+            try:
+                report = PipelineOrchestrator.execute(config)
+            except Exception as exc:  # noqa: BLE001 - GUI must never freeze on a crash
+                root.after(0, lambda: finish_with_crash(str(exc)))
+                return
+            root.after(0, lambda: finish_with_report(report))
+
+        def finish_with_crash(message: str) -> None:
+            run_button.configure(state="normal")
+            status_var.set("Ready")
+            messagebox.showerror("Pipeline failed", message)
+
+        def finish_with_report(report: PipelineReport) -> None:
+            run_button.configure(state="normal")
+            status_var.set("Ready")
+            if report.success:
+                messagebox.showinfo(
+                    "Success",
+                    f"Report generated:\n{report.output_path}\n\n"
+                    f"Records processed: {report.total_records_processed:,}\n"
+                    f"Unmapped records: {report.unmapped_records_count:,}\n"
+                    f"{format_run_time(report)}",
+                )
+                # Shown after the success box so the operator cannot miss a join
+                # that silently produced an almost-empty Summary.
+                warning = unmapped_warning_text(report)
+                if warning:
+                    messagebox.showwarning("Master ID lookup failed", warning)
+            else:
+                messagebox.showerror(
+                    "Pipeline failed", report.error_message or "Unknown error"
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
 
     pad = {"padx": 10, "pady": 6}
 
@@ -417,8 +454,10 @@ def launch_gui() -> None:
     kw_hint_label = ttk.Label(filters_frame, textvariable=kw_hint_var)
     kw_hint_label.grid(row=3, column=2, sticky="w", padx=6, pady=(4, 8))
 
-    ttk.Button(root, text="Run Pipeline", command=run, width=22).grid(
-        row=7, column=0, columnspan=3, **pad
+    run_button = ttk.Button(root, text="Run Pipeline", command=run, width=22)
+    run_button.grid(row=7, column=0, columnspan=3, **pad)
+    ttk.Label(root, textvariable=status_var, width=70, anchor="w").grid(
+        row=8, column=0, columnspan=3, sticky="w", **pad
     )
 
     def toggle_optional_rows(*_args: object) -> None:

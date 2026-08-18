@@ -73,13 +73,14 @@ workbook and saves the result to `--out`.
 | Input | Flag | What it is |
 |---|---|---|
 | Monthly source | `--raw` | The month's giro extract (`.xlsx`/`.xls`/`.xlsm`/`.csv`), keyed by `NO REK` with a `SALDO IDR` balance column |
-| Giro master | `--master` | The target workbook (e.g. `DAFTAR REKENING GIRO TSPM UPDATE JUNI.xlsx`) whose `SALDO UPDATE` column is filled in |
+| Giro master | `--master` | The original giro list (e.g. `DAFTAR REKENING GIRO TSPM.xls`) or a later copy that already has `SALDO UPDATE` / `SALDO JUNI` |
 | Output | `--out` | Where the updated copy is written — the master you select is **never** modified |
 
 Rules the workflow enforces (each is covered by a regression test):
 
-- The historical `SALDO` column is never written to; only the resolved
-  `SALDO UPDATE` column changes.
+- The historical `SALDO` column is never written to. If `SALDO UPDATE` is
+  missing, it is appended; leftover month-named columns such as `SALDO JUNI`
+  are used only when they already exist.
 - Rows whose `JENIS` is `Deposito` (case-insensitive) are skipped even when the
   account exists in the monthly file.
 - Master accounts absent from the monthly file are left **blank** — the
@@ -98,9 +99,11 @@ Rules the workflow enforces (each is covered by a regression test):
 Columns are resolved by alias (`NO REK` / `NO REKENING` / `NOREK` / `NO_REK`,
 `SALDO IDR` / `SALDO_IDR` / `SALDO IN IDR`, `SALDO UPDATE` / `SALDO_UPDATE`) rather
 than by fixed column letters, and a header row is located by scanning the top of
-each sheet — so a title banner above the table is fine. If no sheet resolves the
-required columns the run fails loudly, listing the sheets scanned and the
-aliases attempted, and writes no output file.
+each sheet — so a title banner above the table is fine. The original five-column
+master (`JENIS`, `NO REK`, `PRODUK`, `OPEN DATE`, `SALDO`) is enough: `SALDO UPDATE`
+is created when absent. Legacy `.xls` masters are accepted; the updated copy is
+always `.xlsx`. If no sheet resolves an account column the run fails loudly,
+listing the sheets scanned and the aliases attempted, and writes no output file.
 
 ### Filter config keys
 

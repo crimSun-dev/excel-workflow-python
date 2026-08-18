@@ -159,3 +159,17 @@ def test_exporter_cleans_control_characters_in_headers_and_summary(tmp_path):
     detail = workbook["Enriched_Data"]
     assert detail.cell(row=1, column=1).value == "NAMA"
     assert detail.cell(row=2, column=1).value == "value"
+
+
+def test_exporter_writes_missing_detail_cells_as_blank(summary_df, tmp_path):
+    enriched = pd.DataFrame(
+        {
+            "KODE_UKER": ["0001"],
+            "SEGMEN": [pd.NA],
+            "VOLUME_IN_IDR": [1000.0],
+        }
+    )
+    out = tmp_path / "missing_detail.xlsx"
+    ExcelReportExporter().export(summary_df, enriched, out)
+    ws = load_workbook(out)["Enriched_Data"]
+    assert ws.cell(row=2, column=2).value is None

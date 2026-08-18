@@ -22,6 +22,9 @@ def test_end_to_end_pipeline_success(raw_pipe_file, reference_file, tmp_path):
     assert report.total_records_processed == 4
     assert report.unmapped_records_count == 1
     assert out.exists()
+    assert report.stage_timings is not None
+    assert "read" in report.stage_timings
+    assert "write" in report.stage_timings
 
     wb = load_workbook(out)
     assert set(wb.sheetnames) == {"Summary_Report", "Enriched_Data"}

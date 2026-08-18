@@ -50,6 +50,8 @@ def build() -> int:
         # its compiled core collected. The modern pandas hook handles pandas.
         "--hidden-import",
         "tkinter",
+        "--hidden-import",
+        "xlrd",
         "--collect-all",
         "pydantic",
     ]

@@ -23,6 +23,7 @@ from src.gui import (
     default_segmen_include_text,
     default_source_text,
     filter_hint_text,
+    format_run_time,
     kw_filter_enabled,
     master_picker_config,
     parse_filter_input,
@@ -34,7 +35,7 @@ from src.gui import (
 )
 from src.ingestion import IngestionEngine
 from src.orchestrator import PipelineOrchestrator
-from src.schemas import ProcessingConfig
+from src.schemas import PipelineReport, ProcessingConfig
 from src.workflows.base import (
     WorkflowDefinition,
     WorkflowId,
@@ -479,8 +480,10 @@ def test_report_data_statis_exports_two_sheets_with_surviving_rows(
     workbook = load_workbook(out)
     assert workbook.sheetnames == ["Summary_Report", "Enriched_Data"]
     detail = workbook["Enriched_Data"]
-    # Enriched_Data is the row-level audit trail: every ingested row plus header.
-    assert detail.max_row == 11
+    # Enriched_Data is the surviving-row audit trail: filters run before enrich,
+    # so dropped KORPORASI / wrong-KW rows never reach the detail sheet.
+    # 6 kept data rows + header.
+    assert detail.max_row == 7
 
 
 def test_report_data_statis_bin_parses_identically_to_txt(
@@ -843,21 +846,95 @@ def test_giro_saldo_update_wins_over_a_leftover_month_column(
     assert ws.cell(2, 3).value == 1000
 
 
-def test_giro_fails_when_only_the_historical_saldo_column_exists(
+def test_giro_original_master_creates_saldo_update_column(
     giro_monthly_file, tmp_path
 ):
-    """Bare SALDO is historical; it must never be treated as the write target."""
+    """The original five-column list has no month column; SALDO UPDATE is added."""
     master = _write_giro_master(
-        tmp_path / "giro_master_saldo_only.xlsx",
-        ["NO REK", "JENIS", "SALDO"],
-        [["1234567890", "Giro", 1000]],
+        tmp_path / "DAFTAR REKENING GIRO TSPM.xlsx",
+        ["JENIS", "NO REK", "PRODUK", "OPEN DATE", "SALDO"],
+        [
+            ["Giro", "1234567890", "Giro Umum-IDR", "2022-12-09", 1000],
+            ["Deposito", "3333333333", "Dep 3 bln - IDR", "2026-06-29", 20000000000],
+        ],
     )
-    out = tmp_path / "giro_saldo_only.xlsx"
+    out = tmp_path / "giro_original.xlsx"
+    report = _run_giro(giro_monthly_file, master, out)
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    headers = [ws.cell(1, c).value for c in range(1, 7)]
+    assert headers == [
+        "JENIS",
+        "NO REK",
+        "PRODUK",
+        "OPEN DATE",
+        "SALDO",
+        "SALDO UPDATE",
+    ]
+    assert ws.cell(2, 6).value == 2500
+    assert ws.cell(2, 6).number_format == "0"
+    assert ws.cell(3, 6).value is None
+    assert ws.cell(2, 5).value == 1000
+    assert ws.cell(3, 5).value == 20000000000
+
+
+def test_giro_fails_when_the_master_has_no_account_column(
+    giro_monthly_file, tmp_path
+):
+    master = _write_giro_master(
+        tmp_path / "giro_master_no_account.xlsx",
+        ["JENIS", "PRODUK", "SALDO"],
+        [["Giro", "Giro Umum-IDR", 1000]],
+    )
+    out = tmp_path / "giro_no_account.xlsx"
     report = _run_giro(giro_monthly_file, master, out)
     assert report.success is False
-    assert "SALDO UPDATE" in report.error_message
+    assert "account" in (report.error_message or "").lower()
     assert "Sheets scanned" in report.error_message
     assert out.exists() is False
+
+
+_ORIGINAL_GIRO_XLS = Path(
+    r"c:\Users\Draven Chen\Downloads\DAFTAR REKENING GIRO TSPM.xls"
+)
+
+
+def _write_giro_master_xls(path: Path) -> Path | None:
+    """Writes a BIFF8 .xls original-layout master, or None if no writer exists."""
+    frame = pd.DataFrame(
+        [["Giro", "1234567890", "Giro Umum-IDR", "2022-12-09", 1000]],
+        columns=["JENIS", "NO REK", "PRODUK", "OPEN DATE", "SALDO"],
+    )
+    try:
+        frame.to_excel(path, index=False, engine="xlwt")
+    except Exception:
+        return None
+    return path
+
+
+def test_giro_legacy_xls_master_creates_saldo_update(
+    giro_monthly_file, tmp_path
+):
+    """The original operator file is Excel 97-2003 .xls, not .xlsx."""
+    synthetic = _write_giro_master_xls(tmp_path / "DAFTAR REKENING GIRO TSPM.xls")
+    master = synthetic if synthetic is not None else (
+        _ORIGINAL_GIRO_XLS if _ORIGINAL_GIRO_XLS.exists() else None
+    )
+    if master is None:
+        pytest.skip("no .xls writer and original giro master is not on this machine")
+
+    requested_out = tmp_path / "giro_xls.xls"
+    report = _run_giro(giro_monthly_file, master, requested_out)
+    assert report.success is True, report.error_message
+    assert report.output_path == requested_out.with_suffix(".xlsx")
+    assert report.output_path.exists()
+    assert requested_out.exists() is False
+    ws = load_workbook(report.output_path).worksheets[0]
+    assert ws.cell(1, 5).value == "SALDO"
+    assert ws.cell(1, 6).value == "SALDO UPDATE"
+    if synthetic is not None:
+        assert ws.cell(2, 6).value == 2500
+        assert ws.cell(2, 5).value == 1000
 
 
 def test_giro_does_not_produce_a_summary_report_sheet(giro_output):
@@ -885,6 +962,9 @@ def test_giro_reports_unmatched_account_count(
     # (the Deposito row is skipped by rule, not by a failed lookup).
     assert report.total_records_processed == 5
     assert report.unmapped_records_count == 1
+    assert report.stage_timings is not None
+    assert "read" in report.stage_timings
+    assert "write" in report.stage_timings
 
 
 def test_giro_requires_master_file(giro_monthly_file, tmp_path):
@@ -2086,6 +2166,32 @@ def test_gui_filter_hint_rejects_an_unknown_dimension():
 )
 def test_gui_parse_filter_input(text, expected):
     assert parse_filter_input(text) == expected
+
+
+def test_format_run_time_includes_stage_breakdown():
+    report = PipelineReport(
+        success=True,
+        output_path=Path("out.xlsx"),
+        execution_time_seconds=12.3,
+        total_records_processed=10,
+        unmapped_records_count=0,
+        stage_timings={"read": 0.4, "write": 10.8},
+    )
+    text = format_run_time(report)
+    assert "Time: 12.3s" in text
+    assert "read 0.4s" in text
+    assert "write 10.8s" in text
+
+
+def test_format_run_time_without_stages_is_wall_clock_only():
+    report = PipelineReport(
+        success=True,
+        output_path=Path("out.xlsx"),
+        execution_time_seconds=1.5,
+        total_records_processed=1,
+        unmapped_records_count=0,
+    )
+    assert format_run_time(report) == "Time: 1.5s"
 
 
 def test_gui_edited_source_field_reaches_the_workflow(

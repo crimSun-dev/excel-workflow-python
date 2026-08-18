@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
@@ -88,6 +88,11 @@ class ProcessingConfig(BaseModel):
     number_format: str = Field(
         default="#,##0.00", description="Excel display format for IDR volume"
     )
+    progress_callback: Optional[Callable[[str], None]] = Field(
+        default=None,
+        exclude=True,
+        description="Optional GUI status hook. Not a CLI flag.",
+    )
 
     model_config = {"frozen": True, "arbitrary_types_allowed": True}
 
@@ -145,3 +150,5 @@ class PipelineReport:
     # Set when a join collapsed almost entirely to UNMAPPED. Advisory only:
     # `success` stays True and the report file is still written.
     unmapped_diagnostic: Optional[str] = None
+    # Stage wall times in operator order, e.g. {"read": 0.4, "write": 10.8}.
+    stage_timings: Optional[dict[str, float]] = None

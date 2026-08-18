@@ -3,6 +3,10 @@ Tongkat Gaib Excel
 
 No Python install needed - just double-click TongkatGaibExcel.exe
 
+Read SYSTEM DETAILS.txt for the full product explanation (what you bought,
+why the reports are built this way, and the proprietary license). This file
+is the operator guide.
+
 How to run
 ----------
 1. Double-click TongkatGaibExcel.exe
@@ -121,12 +125,17 @@ added back in.
 Report Giro (Workflow 7) — two Excel workbooks
 ----------------------------------------------
 1. Monthly giro source workbook (NO REK + SALDO IDR)
-2. Giro master workbook (the file whose SALDO UPDATE column is filled in)
+2. Giro master workbook. The original list is enough, for example
+   DAFTAR REKENING GIRO TSPM.xls with JENIS, NO REK, PRODUK, OPEN DATE,
+   SALDO. If SALDO UPDATE is missing, the program adds it. If the file
+   already has SALDO UPDATE or a month column such as SALDO JUNI, that
+   existing column is filled instead.
 
-The master you pick is never overwritten. The updated copy is saved to the
-output path you choose. Deposito rows are skipped. Accounts missing from the
-monthly file are left blank. Balances are written as plain whole numbers
-(format 0) - concatenated digits, no commas and no decimal point.
+The master you pick is never overwritten. The updated copy is saved as
+.xlsx to the output path you choose. Deposito rows are skipped. Accounts
+missing from the monthly file are left blank. Historical SALDO is never
+changed. Balances are written as plain whole numbers (format 0) -
+concatenated digits, no commas and no decimal point.
 
 The FILTERS boxes work here too: they filter the monthly source, so a
 filtered-out account keeps whatever its master cell already had. If your monthly

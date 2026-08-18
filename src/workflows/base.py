@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
@@ -172,6 +173,8 @@ class WorkflowRunResult:
     # threshold trips. The orchestrator forwards it so the GUI can show it
     # instead of leaving the failure buried in the log.
     unmapped_diagnostic: str | None = None
+    # Named stage durations for the success dialog (read / match / write).
+    stage_timings: dict[str, float] | None = None
 
 
 class WorkflowStrategy(ABC):
@@ -183,39 +186,46 @@ class WorkflowStrategy(ABC):
         """The declarative configuration for this workflow."""
 
     def execute(self, config: "ProcessingConfig") -> WorkflowRunResult:
-        """Runs ingest -> optional enrich -> aggregate -> export.
+        """Runs ingest -> filter -> optional enrich -> aggregate -> export.
+
+        SEGMENT / SOURCE / KW are applied *before* enrichment and the detail
+        sheet, so a default Statis run never VLOOKUPs or writes rows the
+        summary is going to drop. Aggregate still reapplies the same filters
+        (cheap on an already-cut frame) so direct engine callers stay correct.
 
         Raises:
             WorkflowValidationError / DataIngestionError / ExportError /
             ReferenceEnrichmentError: surfaced to the orchestrator's boundary.
         """
         definition = self.definition
+        stages: dict[str, float] = {}
 
-        # 1. Ingest raw pipe-delimited data, coercing this workflow's money cols.
+        def mark(name: str, started: float) -> float:
+            stages[name] = round(perf_counter() - started, 4)
+            return perf_counter()
+
+        clock = perf_counter()
+        self._emit_progress(config, "Reading file...")
         ingestion = IngestionEngine(
             delimiter=config.delimiter,
             numeric_columns=definition.numeric_columns or ("VOLUME_IN_IDR",),
         )
         ingested = ingestion.read_raw_data(config.raw_data_path)
         data = ingested.data
+        clock = mark("read", clock)
 
-        # 2. Validate that mandatory input columns are present up front.
         self._validate_columns(data)
 
-        # 3. Resolve the SOURCE filter before enrichment, so a row that is
-        # filtered out never costs a lookup and never reaches the detail sheet.
-        data = apply_source_filters(
-            data,
-            self.resolve_source_include(config),
-            self.resolve_source_exclude(config),
-        )
+        self._emit_progress(config, "Applying filters...")
+        # SOURCE was already pre-enrich; SEGMEN/KW join it so Statis does not
+        # enrich or export the national extract just to keep KANWIL MALANG.
+        data = self.apply_runtime_filters(data, config)
+        clock = mark("filter", clock)
 
-        # 4. Optional reference enrichment (Akumulasi only).
+        self._emit_progress(config, "Matching reference...")
         data, unmapped_count = self._enrich(config, data)
+        clock = mark("match", clock)
 
-        # 5. Aggregate (group + sum, with SEGMEN/KW filter handling). Every
-        # filter resolves to the operator's runtime choice when one was
-        # supplied, and to the workflow's baked default otherwise.
         aggregator = AggregationEngine(
             segment_filter=self.resolve_segment_filter(config),
             exclude_segmen=self.resolve_segmen_exclude(config),
@@ -229,7 +239,7 @@ class WorkflowStrategy(ABC):
             aggfunc=definition.aggfunc,
         )
 
-        # 6. Export the parameterized styled workbook.
+        self._emit_progress(config, "Writing Excel...")
         exporter = ExcelReportExporter(
             number_format=definition.number_format,
             numeric_rounding=definition.numeric_rounding,
@@ -238,8 +248,6 @@ class WorkflowStrategy(ABC):
             display_names=definition.display_name_map,
             report_title=definition.report_title,
             detail_sheet_name=definition.detail_sheet_name,
-            # Under "count" the value column is textual on the detail sheet, so
-            # only the summary's integer counts get numeric formatting.
             format_detail_values=definition.aggfunc != "count",
         )
         output_path = exporter.export(
@@ -248,11 +256,13 @@ class WorkflowStrategy(ABC):
             output_path=config.output_report_path,
             segment_filter_applied=self._filter_label(config),
         )
+        mark("write", clock)
 
         return WorkflowRunResult(
             output_path=output_path,
             total_records_processed=ingested.total_rows,
             unmapped_records_count=unmapped_count,
+            stage_timings=stages,
         )
 
     # ------------------------------------------------------------------ #
@@ -346,6 +356,13 @@ class WorkflowStrategy(ABC):
             data, self.resolve_segment_filter(config), self.resolve_segmen_exclude(config)
         )
         return apply_kw_filters(data, self.resolve_kw_include(config))
+
+    @staticmethod
+    def _emit_progress(config: "ProcessingConfig", message: str) -> None:
+        """Forwards a status line to the GUI when a callback was supplied."""
+        callback = config.progress_callback
+        if callback is not None:
+            callback(message)
 
     @staticmethod
     def apply_source_exclude(

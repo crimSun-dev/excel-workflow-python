@@ -2,8 +2,10 @@
 
 Replaces the operator's manual Ctrl+F reconciliation: for every account in the
 Giro master workbook, look up that month's IDR balance in the monthly giro
-source workbook and write it into the target column (`SALDO UPDATE`, or a
-month-named column such as `SALDO JUNI` when that is what the master uses).
+source workbook and write it into `SALDO UPDATE`. The original five-column
+master (`JENIS`, `NO REK`, `PRODUK`, `OPEN DATE`, `SALDO`) is the normal input:
+if that write column is missing, it is appended. A leftover month-named column
+such as `SALDO JUNI` is still accepted when present.
 
 This workflow does not fit the shared ingest -> aggregate -> export template and
 so overrides `execute()` (the precedent set by Qlola):
@@ -11,24 +13,28 @@ so overrides `execute()` (the precedent set by Qlola):
 * the raw/source input is an Excel workbook, not pipe-delimited text;
 * the output is the *master workbook itself*, updated cell-by-cell with
   openpyxl and saved to the configured output path, so historical columns,
-  styling, formulas, and unrelated sheets all survive. A pandas `to_excel`
-  round-trip would destroy every one of them;
+  styling, formulas, and unrelated sheets all survive for `.xlsx` masters. A
+  pandas `to_excel` round-trip would destroy every one of them. Legacy `.xls`
+  masters are converted into an openpyxl workbook first (openpyxl cannot
+  edit BIFF8 in place) and the result is always saved as `.xlsx`;
 * there is no Summary_Report pivot.
 
 Business rules (see the `workflow-processing` spec):
     * `JENIS = Deposito` rows are never updated (case-insensitive).
     * Master accounts absent from the monthly source are left blank - the
       `UNMAPPED` sentinel must never land in a numeric balance cell.
-    * The historical `SALDO` column is never written to.
+    * The historical `SALDO` column is never written to. Missing
+      `SALDO UPDATE` is created; it is not filled by overwriting `SALDO`.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from time import perf_counter
 
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from ..enrichment import canonicalize_join_id, normalize_header, resolve_alias_column
@@ -56,9 +62,10 @@ ACCOUNT_ALIASES = [
 ]
 JENIS_ALIASES = ["JENIS", "JENIS REKENING", "TIPE"]
 TARGET_COLUMN_ALIASES = ["SALDO UPDATE", "SALDO_UPDATE"]
-# Operational masters still ship month-named write targets (SALDO JUNI, SALDO
-# JULI, ...). These are a fallback only: SALDO UPDATE wins when both exist, and
-# the bare historical SALDO column is never a match.
+CANONICAL_TARGET_HEADER = "SALDO UPDATE"
+# Month-named write targets (SALDO JUNI, SALDO JULI, ...) are a fallback when
+# the master already has one. The original document has neither: SALDO UPDATE
+# is then appended. The bare historical SALDO column is never a match.
 _MONTH_NAMED_SALDO_RE = re.compile(r"^SALDO[_\s]+([A-Z]+)$")
 _MONTH_TOKENS = frozenset(
     {
@@ -101,6 +108,31 @@ DEPOSITO = "deposito"
 _HEADER_SCAN_ROWS = 10
 
 _EXCEL_SUFFIXES = (".xlsx", ".xls", ".xlsm")
+
+
+def _excel_cell_value(value: object) -> object | None:
+    """Converts a pandas cell into something openpyxl will store.
+
+    Empty / NaN cells stay blank. Numpy scalars become Python ints/floats so
+    account numbers copied out of a legacy .xls still join as digits.
+    """
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return item()
+        except (ValueError, AttributeError):
+            return value
+    return value
+
 
 REPORT_GIRO_DEFINITION = WorkflowDefinition(
     workflow_id=WorkflowId.REPORT_GIRO,
@@ -155,21 +187,36 @@ class ReportGiroStrategy(WorkflowStrategy):
                 f"Giro master workbook not found: {master_path}"
             )
 
+        stages: dict[str, float] = {}
+
+        def mark(name: str, started: float) -> float:
+            stages[name] = round(perf_counter() - started, 4)
+            return perf_counter()
+
         # 1. Build the monthly {account -> saldo} lookup (VLOOKUP first hit),
         # honoring the operator's SEGMEN/SOURCE filters where those columns exist.
+        # Every sheet is still scanned; aliases still decide the winning columns.
+        clock = perf_counter()
+        self._emit_progress(config, "Reading monthly source...")
         balances = self._load_monthly_balances(Path(config.raw_data_path), config)
+        clock = mark("read", clock)
 
         # 2. Update the master in memory, then save to the output path. Nothing
         # is written until every row succeeded, so a resolution failure can
         # never leave a partial output that looks like a successful run.
-        workbook = load_workbook(master_path)
+        self._emit_progress(config, "Loading master...")
+        workbook = self._load_master_workbook(master_path)
         worksheet, header_row, columns = self._resolve_master_layout(workbook)
+        clock = mark("match", clock)
+
+        self._emit_progress(config, "Writing balances...")
         scanned, unmatched = self._apply_balances(
             worksheet, header_row, columns, balances
         )
 
-        output_path = Path(config.output_report_path)
+        output_path = self._xlsx_output_path(Path(config.output_report_path))
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._emit_progress(config, "Saving Excel...")
         try:
             workbook.save(output_path)
         except PermissionError as exc:
@@ -177,11 +224,13 @@ class ReportGiroStrategy(WorkflowStrategy):
                 f"Cannot write '{output_path}'. The file may be open in Microsoft "
                 f"Excel. Close it or choose a different output path."
             ) from exc
+        mark("write", clock)
 
         return WorkflowRunResult(
             output_path=output_path,
             total_records_processed=scanned,
             unmapped_records_count=unmatched,
+            stage_timings=stages,
         )
 
     # ------------------------------------------------------------------ #
@@ -279,11 +328,11 @@ class ReportGiroStrategy(WorkflowStrategy):
     def _resolve_master_layout(self, workbook) -> tuple[Worksheet, int, dict[str, int]]:
         """Finds the sheet, header row, and 1-based column indexes to work with.
 
-        The first sheet exposing both an account column and a write target
-        wins. `SALDO UPDATE` is preferred; a month-named column such as
-        `SALDO JUNI` is accepted when the canonical header is absent. Header
-        detection scans the top rows so a title banner above the table does not
-        break resolution, and no column letter is hardcoded.
+        The first sheet exposing an account column wins. The write target is
+        `SALDO UPDATE` when present, else a month-named column such as
+        `SALDO JUNI`, else a new `SALDO UPDATE` column appended after the last
+        header. Header detection scans the top rows so a title banner above the
+        table does not break resolution, and no column letter is hardcoded.
         """
         attempts: list[tuple[str, list[str]]] = []
         for worksheet in workbook.worksheets:
@@ -292,9 +341,13 @@ class ReportGiroStrategy(WorkflowStrategy):
                 if not headers:
                     continue
                 account_col = self._alias_index(headers, ACCOUNT_ALIASES)
-                target_col = self._target_index(headers)
-                if account_col is None or target_col is None:
+                if account_col is None:
                     continue
+                target_col = self._target_index(headers)
+                if target_col is None:
+                    target_col = self._append_saldo_update_column(
+                        worksheet, header_row, headers
+                    )
                 return (
                     worksheet,
                     header_row,
@@ -311,13 +364,13 @@ class ReportGiroStrategy(WorkflowStrategy):
             )
 
         raise GiroColumnResolutionError(
-            "Unable to resolve the account and target SALDO UPDATE columns in the Giro "
-            "master workbook.\n"
+            "Unable to resolve the account column in the Giro master workbook.\n"
             f"Sheets scanned:\n{self._format_attempts(attempts)}\n"
             "Aliases attempted:\n"
             f"  - account: {ACCOUNT_ALIASES}\n"
-            f"  - target : {TARGET_COLUMN_ALIASES} "
-            "(or a month-named column such as SALDO JUNI / SALDO JULI)"
+            "The write column is SALDO UPDATE (created when missing) or a "
+            "month-named column such as SALDO JUNI / SALDO JULI. Historical "
+            "SALDO is never overwritten."
         )
 
     @staticmethod
@@ -344,12 +397,13 @@ class ReportGiroStrategy(WorkflowStrategy):
         return None
 
     def _target_index(self, headers: dict[int, str]) -> int | None:
-        """1-based index of the write-target balance column.
+        """1-based index of an existing write-target balance column.
 
         `SALDO UPDATE` / `SALDO_UPDATE` win when present so a master that has
         both the canonical header and a leftover month column is not ambiguous.
         Otherwise the rightmost month-named `SALDO <month>` column is used.
-        The historical `SALDO` column is never returned.
+        The historical `SALDO` column is never returned; callers append
+        `SALDO UPDATE` when this returns None.
         """
         canonical = self._alias_index(headers, TARGET_COLUMN_ALIASES)
         if canonical is not None:
@@ -361,9 +415,78 @@ class ReportGiroStrategy(WorkflowStrategy):
         return month_col
 
     @staticmethod
+    def _append_saldo_update_column(
+        worksheet: Worksheet, header_row: int, headers: dict[int, str]
+    ) -> int:
+        """Creates SALDO UPDATE immediately after the last header cell."""
+        target_col = max(headers) + 1
+        worksheet.cell(header_row, target_col).value = CANONICAL_TARGET_HEADER
+        return target_col
+
+    @staticmethod
     def _is_month_named_saldo(normalized_header: str) -> bool:
         match = _MONTH_NAMED_SALDO_RE.fullmatch(normalized_header)
         return bool(match and match.group(1) in _MONTH_TOKENS)
+
+    def _load_master_workbook(self, path: Path):
+        """Loads the Giro master as an openpyxl workbook.
+
+        `.xlsx` / `.xlsm` are opened in place. Legacy `.xls` (the original
+        `DAFTAR REKENING GIRO TSPM.xls`) is copied into a new workbook because
+        openpyxl cannot edit BIFF8 files.
+        """
+        suffix = path.suffix.lower()
+        if suffix in (".xlsx", ".xlsm"):
+            try:
+                return load_workbook(path)
+            except Exception as exc:  # noqa: BLE001 - re-wrapped for the caller
+                raise WorkflowValidationError(
+                    f"Failed to read Giro master workbook {path}: {exc}"
+                ) from exc
+        if suffix == ".xls":
+            return self._workbook_from_legacy_xls(path)
+        raise WorkflowValidationError(
+            f"Unsupported Giro master file type: '{suffix}'. "
+            "Expected an Excel workbook (.xlsx/.xls/.xlsm)."
+        )
+
+    def _workbook_from_legacy_xls(self, path: Path) -> Workbook:
+        """Copies every sheet of a BIFF8 .xls master into an openpyxl workbook."""
+        try:
+            excel_file = pd.ExcelFile(path)
+            workbook = Workbook()
+            default_sheet = workbook.active
+            first = True
+            for sheet_name in excel_file.sheet_names:
+                frame = pd.read_excel(excel_file, sheet_name=sheet_name, header=None)
+                if first:
+                    worksheet = default_sheet
+                    worksheet.title = str(sheet_name)[:31]
+                    first = False
+                else:
+                    worksheet = workbook.create_sheet(title=str(sheet_name)[:31])
+                self._write_frame_to_worksheet(frame, worksheet)
+            return workbook
+        except Exception as exc:  # noqa: BLE001 - re-wrapped for the caller
+            raise WorkflowValidationError(
+                f"Failed to read Giro master workbook {path}: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _write_frame_to_worksheet(frame: pd.DataFrame, worksheet: Worksheet) -> None:
+        for row_idx, row in enumerate(frame.to_numpy(), start=1):
+            for col_idx, value in enumerate(row, start=1):
+                converted = _excel_cell_value(value)
+                if converted is None:
+                    continue
+                worksheet.cell(row_idx, col_idx).value = converted
+
+    @staticmethod
+    def _xlsx_output_path(path: Path) -> Path:
+        """openpyxl can only write .xlsx; coerce a leftover .xls output name."""
+        if path.suffix.lower() == ".xls":
+            return path.with_suffix(".xlsx")
+        return path
 
     def _apply_balances(
         self,

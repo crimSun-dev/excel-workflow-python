@@ -54,52 +54,64 @@ class IngestionEngine:
         if not file_path.exists():
             raise DataIngestionError(f"Raw data file not found: {file_path}")
 
-        raw_text = self._read_with_encoding_fallback(file_path)
-        if not raw_text.strip():
-            raise DataIngestionError("Raw data file is empty")
-
-        lines = [ln for ln in raw_text.splitlines() if ln.strip()]
-        if not lines:
-            raise DataIngestionError("Raw data file is empty")
-
-        header = self._sanitize_headers(lines[0].split(self.delimiter))
-        expected_cols = len(header)
-        if expected_cols == 0:
-            raise DataIngestionError("Raw data file contains no columns")
-
-        rows: list[list[str]] = []
+        frame: pd.DataFrame | None = None
         malformed = 0
-        for line in lines[1:]:
-            fields = [f.strip() for f in line.split(self.delimiter)]
-            # Malformed rows have a differing field count (e.g. extra pipes,
-            # which would otherwise shift columns). Skip and count them.
-            if len(fields) != expected_cols:
-                malformed += 1
-                continue
-            rows.append(fields)
-
-        df = pd.DataFrame(rows, columns=header)
-        df = self._coerce_numeric_columns(df)
-
-        return IngestionResult(
-            data=df,
-            total_rows=len(df),
-            malformed_rows_count=malformed,
-        )
-
-    @staticmethod
-    def _read_with_encoding_fallback(file_path: Path) -> str:
-        """Attempts a list of encodings; returns decoded text of the first hit."""
         last_error: Exception | None = None
         for encoding in _ENCODING_FALLBACKS:
+            skipped = 0
+
+            def _skip_bad_line(bad_line: list[str]) -> None:
+                nonlocal skipped
+                skipped += 1
+                return None
+
             try:
-                return file_path.read_text(encoding=encoding)
-            except (UnicodeDecodeError, UnicodeError) as exc:
+                frame = pd.read_csv(
+                    file_path,
+                    sep=self.delimiter,
+                    encoding=encoding,
+                    dtype=str,
+                    engine="python",
+                    on_bad_lines=_skip_bad_line,
+                    keep_default_na=False,
+                    skip_blank_lines=True,
+                )
+                malformed = skipped
+                break
+            except UnicodeDecodeError as exc:
                 last_error = exc
                 continue
-        raise DataIngestionError(
-            f"Unable to decode {file_path} with any known encoding"
-        ) from last_error
+            except pd.errors.EmptyDataError as exc:
+                raise DataIngestionError("Raw data file is empty") from exc
+        else:
+            raise DataIngestionError(
+                f"Unable to decode {file_path} with any known encoding"
+            ) from last_error
+
+        if frame is None or (frame.empty and len(frame.columns) == 0):
+            raise DataIngestionError("Raw data file is empty")
+
+        frame.columns = self._sanitize_headers([str(c) for c in frame.columns])
+        if not any(str(name).strip() for name in frame.columns):
+            raise DataIngestionError("Raw data file contains no columns")
+
+        for column in frame.columns:
+            frame[column] = frame[column].astype(str).str.strip()
+
+        nonempty = None
+        for column in frame.columns:
+            flag = frame[column].ne("")
+            nonempty = flag if nonempty is None else nonempty | flag
+        if nonempty is not None:
+            frame = frame.loc[nonempty].reset_index(drop=True)
+
+        frame = self._coerce_numeric_columns(frame)
+
+        return IngestionResult(
+            data=frame,
+            total_rows=len(frame),
+            malformed_rows_count=malformed,
+        )
 
     @staticmethod
     def _sanitize_headers(headers: list[str]) -> list[str]:

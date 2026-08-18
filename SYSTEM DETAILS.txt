@@ -1,0 +1,303 @@
+TONGKAT GAIB EXCEL
+SYSTEM DETAILS
+============================================================
+Product of crimSun
+Windows desktop package  |  Compiled application  |  Source not included
+
+This document is for buyers and operators. It explains what you receive,
+what the software does, and why it is built to a higher standard than a
+macro, a recorded Excel script, or a one-off Python notebook.
+
+
+1. WHAT YOU ARE BUYING
+----------------------
+Tongkat Gaib Excel is a standalone Windows program that produces the
+monthly bank reports your team currently builds by hand in Microsoft
+Excel.
+
+You receive a compiled Windows executable. You do not receive source
+code, development files, or a license to copy the internals. Unzip the
+package, double-click TongkatGaibExcel.exe, and run. No Python install.
+No Visual Studio. No Excel add-in to register. Microsoft Excel is only
+needed afterwards if you want to open the finished workbook.
+
+Package contents:
+
+  START HERE.txt          How to run the program, including filters
+  SYSTEM DETAILS.txt      This document
+  TongkatGaibExcel.exe    The compiled application
+
+That is the entire product. There is nothing else to install.
+
+
+2. THE PROBLEM IT REPLACES
+--------------------------
+The monthly close for these reports is a four-step Excel ritual:
+
+  1. Text to Columns on a pipe-delimited extract
+  2. VLOOKUP against a branch / UKER mapping workbook
+  3. PivotTable, then ticking and unticking filters
+  4. Number formats, column widths, a Grand Total, and a paste that
+     does not explode into scientific notation (E+12)
+
+Every step is slow, easy to get slightly wrong, and hard to audit after
+the fact. Two operators can produce two different "official" numbers
+from the same files because a filter was left ticked, a lookup key was
+stored as 12345.0 instead of 12345, or a header was spelled KODE UKER
+instead of KODE_UKER.
+
+Tongkat Gaib Excel performs that entire ritual, for seven distinct
+report types, as one run. The output is a styled .xlsx workbook. The
+files you selected as inputs are never overwritten.
+
+
+3. THE SEVEN REPORTS
+--------------------
+The dropdown is ordered in daily reporting sequence.
+
+  1. Report Summary Akumulasi
+     Sum of FBI and sum of VOLUME_IN_IDR by branch.
+     Needs the UKER / branch mapping workbook.
+
+  2. Time Series Active User Qlola
+     Count of distinct active users (frequency at least 5) as a
+     branch x activity crosstab.
+     Needs the UKER mapping workbook plus the master-data workbook
+     that maps user ID to MAIN_CODE. Summary counts mapped users
+     only, matching a dashboard that drops #N/A. Unmapped IDs still
+     appear on the detail sheet, so nothing is lost.
+
+  3. Report Data Statis
+     Count of ID_PRODUCT per branch.
+     Needs the mapping workbook. Raw extract may be a .bin file
+     (it is still plain delimited text). Default cut: drop KORPORASI,
+     keep KANWIL MALANG. Change that for one run with the FILTERS
+     boxes — see START HERE.txt.
+
+  4. Rincian Vol TF
+     Sum of AMOUNT_IN_IDR by branch. Default: drop Wholesale.
+     No mapping workbook.
+
+  5. Rincian Portal BG
+     Sum of AMOUNT_IN_IDR by branch. No default segment cut.
+     No mapping workbook.
+
+  6. Report Vol Briva
+     Sum of VOLUME_IDR (rounded up per row) by branch, defaulting
+     to NONWHOLESALE. Needs the mapping workbook. The Grand Total
+     keeps its cents so a later ROUND in Excel is an operator
+     choice, not a silent loss of money.
+
+  7. Report Giro
+     Not a pivot. This is the Ctrl+F reconciliation: copy each
+     account's monthly IDR balance into the giro master and save
+     a new copy.
+
+     Inputs:
+       - Monthly giro extract (NO REK + SALDO IDR)
+       - Giro master. The original list is enough
+         (DAFTAR REKENING GIRO TSPM.xls with JENIS, NO REK, PRODUK,
+         OPEN DATE, SALDO). If SALDO UPDATE is missing, the program
+         appends it. If the file already has SALDO UPDATE or a month
+         column such as SALDO JUNI, that existing column is filled.
+
+     Rules that always hold:
+       - Historical SALDO is never overwritten
+       - JENIS = Deposito is skipped
+       - Accounts missing from the monthly file stay blank
+         (no UNMAPPED text is ever written into a balance cell)
+       - Duplicate monthly accounts take the first hit, same as
+         VLOOKUP
+       - Account numbers match across Excel's int / float / text
+         storage (1234567890 matches 1234567890.0)
+       - The master you pick is never modified
+       - Legacy .xls masters are accepted; the updated copy is .xlsx
+       - Balances are whole rupiah, format 0 — concatenated digits,
+         no thousands separator, no decimal point, no E+12
+
+
+4. WHY THIS IS HIGH-GRADE SOFTWARE
+----------------------------------
+This is not a recorded macro with the bank's column letters hardcoded.
+The quality bar is the same one used for production finance tooling:
+the program must be safe on live files, honest about what it did, and
+boring when something is wrong.
+
+  Built as a real product, not a spreadsheet trick
+      A compiled Windows application with a native file-picker
+      interface. It does not drive Microsoft Excel in the background,
+      so it does not hang on a hidden Excel dialog, does not require
+      an Excel license on the processing machine, and does not depend
+      on a particular Office version.
+
+  Your source files are sacred
+      Inputs are read. Outputs are written to the path you choose.
+      The giro master, the mapping workbook, and the monthly extract
+      are left byte-for-byte as they were. A failed Giro run writes
+      no output file at all, so you never send a half-updated master
+      that looks finished.
+
+  Business rules are locked, not "usually"
+      Deposito rows stay blank. Historical SALDO is never the write
+      target. Qlola Summary does not quietly inflate itself with
+      unmapped IDs. Data Statis does not silently include KORPORASI
+      when the box is empty. These are enforced behaviours, not
+      comments in a script.
+
+  Headers are resolved by meaning, not by column F
+      Live bank files spell the same field as KODE_UKER, KODE UKER,
+      KODE UNIT, NO REK, NO_REK, SALDO IDR, SALDO UPDATE, SALDO JUNI,
+      and so on. The program matches aliases, ignores extra spaces
+      and letter case, and scans the top of each sheet so a title
+      banner above the table does not break the run. If it cannot
+      find a required column, it fails loudly and lists the sheets
+      scanned, the columns it saw, and the names it tried. It does
+      not guess.
+
+  Join keys survive Excel's type games
+      Excel loves to store an account or branch code as 12345.0.
+      The program canonicalises those keys before matching, so a
+      lookup does not fail because one file is text and the other
+      is a float. That is the class of bug that makes a manual
+      VLOOKUP look "random" at month-end.
+
+  The numbers look like money, not like a calculator overflow
+      Integer reports ship format 0 — concatenated digits, no comma,
+      no decimal, no scientific notation. Trillion-scale giro and
+      volume figures stay exact numbers in the cell, not text and
+      not 1.25E+12. Briva is the exception that proves the rule: it
+      keeps two decimal places on purpose so cents are not rounded
+      away inside the engine.
+
+  Filters tell the truth
+      Empty FILTERS boxes mean "run this report's normal rule".
+      Typed text means "keep only what I typed" — it replaces the
+      normal rule for that run, it does not add to it. Each box
+      shows what the empty state does. The Summary sheet's
+      "Filter Applied:" line states exactly what ran, so a
+      corporate-only cut cannot be mistaken for the normal monthly
+      pack. A filter on a file that has no such column is a no-op;
+      it never crashes the run.
+
+  Two sheets when you need an audit trail
+      Pivot reports write Summary_Report plus a row-level detail
+      sheet. If a total is questioned, the detail is in the same
+      workbook. Giro is the one report that is a master update
+      rather than a pivot, so it does not invent a summary sheet
+      that was never part of that working paper.
+
+  Failure is an explanation, not a freeze
+      Open-file conflicts, missing masters, unreadable workbooks,
+      and unresolvable columns come back as a readable error with
+      enough detail to fix the input. The program does not leave
+      you staring at a blank window.
+
+  Proven against the real files, not only tidy examples
+      The workflows were built against the actual extracts this
+      desk uses: pipe-delimited .txt / .csv / .bin dumps, multi-
+      sheet mapping workbooks, Qlola master ID layouts, Briva
+      volume files, and the original giro register in Excel 97-2003
+      .xls form. The original giro document does not need a month
+      column prepared by hand. That is the point of buying software
+      instead of maintaining a template.
+
+
+5. HOW A RUN WORKS (OPERATOR VIEW)
+----------------------------------
+  1. Double-click TongkatGaibExcel.exe
+  2. Pick the report from the dropdown
+  3. Pick the source file
+  4. Pick the mapping workbook if that report needs one
+  5. Pick the extra workbook if that report needs one
+     (Qlola master-data, or the giro master)
+  6. Leave FILTERS empty for the normal monthly cut, or type a
+     keep-list to replace that cut for this run only
+  7. Choose where to save the .xlsx
+  8. Run Pipeline
+  9. Read "Filter Applied:" on the Summary sheet before you send it
+
+Switching report clears the filter boxes, so last month's corporate-only
+cut cannot leak into this month's Accumulasi. Full filter recipes are in
+START HERE.txt — including the KORPORASI trap, which is the one mistake
+the interface is designed to make obvious.
+
+
+6. WHAT THE SOFTWARE WILL NOT DO
+--------------------------------
+  - It will not modify the files you selected as inputs
+  - It will not write UNMAPPED into a giro balance cell
+  - It will not treat historical SALDO as the update column
+  - It will not require you to rename every header to a canonical
+    English name before the run
+  - It will not require Microsoft Excel to be installed in order
+    to process
+  - It will not include source code in this package
+
+
+7. SYSTEM REQUIREMENTS
+----------------------
+  OS:       Windows 10 or Windows 11, 64-bit
+  Runtime:  None. The .exe is self-contained
+  Excel:    Not required to run. Required only to open the output
+  Disk:     About 50 MB for the unzipped package
+  Network:  Not required. Processing is local
+  Files:    Close the output workbook in Excel before running again
+            (Windows will not overwrite a file that is open)
+
+
+8. INTELLECTUAL PROPERTY
+-------------------------
+Tongkat Gaib Excel, including the compiled application in this package,
+is proprietary software of crimSun.
+
+This zip is a licensed runtime package for the buyer. It contains the
+program you run, not the source that produces it. You may install and
+use the executable for your reporting work. You may not reverse
+engineer, decompile, or redistribute the software in order to copy,
+resell, or recreate it.
+
+Questions about licensing or additional seats: contact crimSun.
+
+
+9. IF SOMETHING LOOKS WRONG
+---------------------------
+  Pipeline failed
+      Read the message. For column problems it lists sheets scanned
+      and names attempted. Fix the file or pick the correct workbook;
+      do not rename columns at random.
+
+  Totals look low or high
+      Read "Filter Applied:" first. A typed SEGMENT / SOURCE / KW box
+      keeps ONLY those values. Empty means the report's normal rule,
+      not "everything".
+
+  Qlola Summary is smaller than a hand pivot
+      Unmapped IDs are excluded from the Summary on purpose, same as
+      dropping #N/A. They are still on the detail sheet. If almost
+      every ID is unmapped, the program warns you after the run —
+      check that the master-data file is the right one.
+
+  Giro output has a new column
+      That is correct when you started from the original five-column
+      register. SALDO is history. SALDO UPDATE is the fill.
+
+  Cannot save
+      Close the output file in Excel, or choose a different path.
+
+
+10. PRODUCT POSITION
+--------------------
+Tongkat Gaib Excel is the desk's reporting engine: seven month-end
+workbooks, one program, one click, numbers that survive review.
+
+It is high-grade because it treats the operator's live files as
+production data — aliases instead of brittle column letters, joins that
+survive Excel type coercion, filters that say what they did, failures
+that explain themselves, and a compiled package that does not ask the
+buyer to become a developer.
+
+Source remains proprietary. The result is what you run.
+
+============================================================
+Tongkat Gaib Excel  |  crimSun  |  SYSTEM DETAILS
+Read START HERE.txt to operate the program.
