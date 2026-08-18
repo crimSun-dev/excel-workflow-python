@@ -194,6 +194,25 @@ def unmapped_warning_text(report: PipelineReport) -> str | None:
     )
 
 
+def pipeline_failure_dialog(error_message: str | None) -> tuple[str, str]:
+    """(title, body) for the failure popup, with a dedicated empty-file case.
+
+    Empty extracts used to finish as a successful 0-row report. The ingest
+    boundary now aborts; this is what makes that abort look like a notice
+    rather than a stack trace.
+    """
+    message = (error_message or "").strip() or "Unknown error"
+    lowered = message.lower()
+    if "no data rows" in lowered or "file submitted for processing is empty" in lowered:
+        return (
+            "Empty file",
+            "The file submitted for processing is empty.\n\n"
+            "It has no data rows — only column titles, or nothing at all. "
+            "Nothing was processed. Please check the extract and try again.",
+        )
+    return ("Pipeline failed", message)
+
+
 def format_run_time(report: PipelineReport) -> str:
     """Wall-clock time plus named stage durations for the success dialog."""
     lines = [f"Time: {report.execution_time_seconds}s"]
@@ -352,28 +371,30 @@ def launch_gui() -> None:
         def finish_with_crash(message: str) -> None:
             run_button.configure(state="normal")
             status_var.set("Ready")
-            messagebox.showerror("Pipeline failed", message)
+            title, body = pipeline_failure_dialog(message)
+            messagebox.showerror(title, body)
 
         def finish_with_report(report: PipelineReport) -> None:
             run_button.configure(state="normal")
             status_var.set("Ready")
             if report.success:
-                messagebox.showinfo(
-                    "Success",
+                success_body = (
                     f"Report generated:\n{report.output_path}\n\n"
                     f"Records processed: {report.total_records_processed:,}\n"
                     f"Unmapped records: {report.unmapped_records_count:,}\n"
-                    f"{format_run_time(report)}",
+                    f"{format_run_time(report)}"
                 )
+                if report.operator_note:
+                    success_body += f"\n\n{report.operator_note}"
+                messagebox.showinfo("Success", success_body)
                 # Shown after the success box so the operator cannot miss a join
                 # that silently produced an almost-empty Summary.
                 warning = unmapped_warning_text(report)
                 if warning:
                     messagebox.showwarning("Master ID lookup failed", warning)
             else:
-                messagebox.showerror(
-                    "Pipeline failed", report.error_message or "Unknown error"
-                )
+                title, body = pipeline_failure_dialog(report.error_message)
+                messagebox.showerror(title, body)
 
         threading.Thread(target=worker, daemon=True).start()
 

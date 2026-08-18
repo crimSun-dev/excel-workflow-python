@@ -44,8 +44,93 @@ def test_ingest_skips_and_counts_malformed_rows(raw_pipe_file_malformed):
 def test_ingest_empty_file_raises(tmp_path):
     empty = tmp_path / "empty.txt"
     empty.write_text("", encoding="utf-8")
-    with pytest.raises(DataIngestionError):
+    with pytest.raises(DataIngestionError, match="empty"):
         IngestionEngine().read_raw_data(empty)
+
+
+def test_ingest_header_only_file_raises(tmp_path):
+    """A vendor extract with titles but no data rows must not look like success."""
+    header_only = tmp_path / "RINCIAN_VOL_TF_empty.csv"
+    header_only.write_text(
+        "TAHUN|PERIODE|POSISI|REGION|RGDESC|MAINBR|MBDESC|BRANCH|BRDESC|"
+        "PRODUK|MASTERREF|CIFNO|CUST_NAME|GRUP|SEGMEN|DIVISI|CCY|"
+        "AMOUNT_IN_IDR|AMOUNT_ORI|ISSUED_DATE|PNRM|RMNAME\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(DataIngestionError, match="no data rows"):
+        IngestionEngine().read_raw_data(header_only)
+
+
+def test_ingest_skips_title_banner_above_headers(tmp_path):
+    """Headers in the middle of a file still parse as the real table."""
+    path = tmp_path / "banner.txt"
+    path.write_text(
+        "Rincian Portal BG export\n"
+        "Generated: 2026-08-01\n"
+        "\n"
+        "MAINBR|MBNAME|AMOUNT_IN_IDR\n"
+        "B01|Branch One|1000\n"
+        "B02|Branch Two|500\n",
+        encoding="utf-8",
+    )
+    result = IngestionEngine(numeric_columns=("AMOUNT_IN_IDR",)).read_raw_data(path)
+    assert list(result.data.columns) == ["MAINBR", "MBNAME", "AMOUNT_IN_IDR"]
+    assert result.total_rows == 2
+    assert result.header_row == 4
+    assert result.data["AMOUNT_IN_IDR"].tolist() == [1000.0, 500.0]
+
+
+def test_ingest_keeps_values_on_both_sides_of_a_mid_file_header(tmp_path):
+    """Headers inserted in the middle of the values are not a reason to drop rows."""
+    path = tmp_path / "mid_header.csv"
+    path.write_text(
+        "B01|Branch One|1000\n"
+        "B01|Branch One|2000\n"
+        "MAINBR|MBNAME|AMOUNT_IN_IDR\n"
+        "B02|Branch Two|500\n"
+        "B03|Branch Three|250\n",
+        encoding="utf-8",
+    )
+    result = IngestionEngine(numeric_columns=("AMOUNT_IN_IDR",)).read_raw_data(path)
+    assert list(result.data.columns) == ["MAINBR", "MBNAME", "AMOUNT_IN_IDR"]
+    assert result.header_row == 3
+    assert result.total_rows == 4
+    assert result.data["MAINBR"].tolist() == ["B01", "B01", "B02", "B03"]
+    assert result.data["AMOUNT_IN_IDR"].tolist() == [1000.0, 2000.0, 500.0, 250.0]
+
+
+def test_ingest_finds_headers_on_a_deep_row(tmp_path):
+    """No fixed scan window — titles on row 399 are still found."""
+    lines = [f"B01|Branch One|{i}\n" for i in range(398)]
+    lines.append("MAINBR|MBNAME|AMOUNT_IN_IDR\n")
+    lines.append("B02|Branch Two|999\n")
+    path = tmp_path / "header_row_399.csv"
+    path.write_text("".join(lines), encoding="utf-8")
+    result = IngestionEngine(numeric_columns=("AMOUNT_IN_IDR",)).read_raw_data(path)
+    assert result.header_row == 399
+    assert result.total_rows == 399  # 398 above + 1 below
+    assert result.data["MAINBR"].iloc[0] == "B01"
+    assert result.data["MAINBR"].iloc[-1] == "B02"
+    assert result.data["AMOUNT_IN_IDR"].iloc[-1] == 999.0
+
+
+def test_ingest_reads_excel_workbook_with_mid_file_headers(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["B01", "Branch One", 1000])
+    sheet.append(["B01", "Branch One", 2000])
+    sheet.append(["MAINBR", "MBNAME", "AMOUNT_IN_IDR"])
+    sheet.append(["B02", "Branch Two", 500])
+    path = tmp_path / "portal_bg_mid.xlsx"
+    workbook.save(path)
+
+    result = IngestionEngine(numeric_columns=("AMOUNT_IN_IDR",)).read_raw_data(path)
+    assert list(result.data.columns) == ["MAINBR", "MBNAME", "AMOUNT_IN_IDR"]
+    assert result.header_row == 3
+    assert result.total_rows == 3
+    assert result.data["AMOUNT_IN_IDR"].tolist() == [1000.0, 2000.0, 500.0]
 
 
 def test_ingest_missing_file_raises(tmp_path):

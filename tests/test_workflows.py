@@ -27,6 +27,7 @@ from src.gui import (
     kw_filter_enabled,
     master_picker_config,
     parse_filter_input,
+    pipeline_failure_dialog,
     raw_picker_config,
     segment_filter_enabled,
     source_filter_enabled,
@@ -401,6 +402,127 @@ def test_rincian_portal_bg_aggregates_without_filter(rincian_portal_bg_file, tmp
     ]
     assert all(isinstance(c.value, int) for c in amount_cells)
     assert all(c.number_format == "0" for c in amount_cells)
+
+
+def test_rincian_portal_bg_recovers_headers_below_a_title_banner(tmp_path):
+    """Pak Denny's mid-file header export still produces the correct totals."""
+    path = tmp_path / "portal_bg_banner.csv"
+    path.write_text(
+        "RINCIAN PORTAL BG\n"
+        "Kode UKER report — ignore this banner\n"
+        "\n"
+        "MAINBR|MBNAME|AMOUNT_IN_IDR\n"
+        "B01|Branch One|1000\n"
+        "B01|Branch One|2000\n"
+        "B02|Branch Two|500\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "portal_bg_banner.xlsx"
+    report = PipelineOrchestrator.execute(
+        ProcessingConfig(
+            raw_data_path=path,
+            workflow_id="rincian-portal-bg",
+            output_report_path=out,
+        )
+    )
+    assert report.success is True, report.error_message
+    assert report.total_records_processed == 3
+    assert report.operator_note is not None
+    assert "row 4" in report.operator_note
+
+    ws = load_workbook(out)["Summary_Report"]
+    rows = {
+        (r[0].value, r[1].value): r[2].value
+        for r in ws.iter_rows()
+        if r[0].value in {"B01", "B02"}
+    }
+    assert rows[("B01", "Branch One")] == 3000
+    assert rows[("B02", "Branch Two")] == 500
+
+
+def test_rincian_portal_bg_keeps_values_above_and_below_mid_file_headers(tmp_path):
+    """Headers in the middle of the values still produce the correct totals."""
+    path = tmp_path / "portal_bg_mid.csv"
+    path.write_text(
+        "B01|Branch One|1000\n"
+        "B01|Branch One|2000\n"
+        "MAINBR|MBNAME|AMOUNT_IN_IDR\n"
+        "B02|Branch Two|500\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "portal_bg_mid.xlsx"
+    report = PipelineOrchestrator.execute(
+        ProcessingConfig(
+            raw_data_path=path,
+            workflow_id="rincian-portal-bg",
+            output_report_path=out,
+        )
+    )
+    assert report.success is True, report.error_message
+    assert report.total_records_processed == 3
+    assert report.operator_note is not None
+    assert "row 3" in report.operator_note
+
+    ws = load_workbook(out)["Summary_Report"]
+    rows = {
+        (r[0].value, r[1].value): r[2].value
+        for r in ws.iter_rows()
+        if r[0].value in {"B01", "B02"}
+    }
+    assert rows[("B01", "Branch One")] == 3000
+    assert rows[("B02", "Branch Two")] == 500
+
+
+_LIVE_BG_MISPLACED_HEADERS = Path(
+    r"C:\Users\Draven Chen\Downloads"
+    r"\RINCIAN_RINCIAN_PORTAL_BG_2026-08-02_1785806880.csv.xlsx"
+)
+
+
+@pytest.mark.skipif(
+    not _LIVE_BG_MISPLACED_HEADERS.exists(),
+    reason="Portal BG misplaced-header sample not in Downloads",
+)
+def test_rincian_portal_bg_live_headers_in_middle_of_values(tmp_path):
+    """Clairine's .csv.xlsx with titles on row 398 still produces a report."""
+    out = tmp_path / "portal_bg_live_mid.xlsx"
+    report = PipelineOrchestrator.execute(
+        ProcessingConfig(
+            raw_data_path=_LIVE_BG_MISPLACED_HEADERS,
+            workflow_id="rincian-portal-bg",
+            output_report_path=out,
+        )
+    )
+    assert report.success is True, report.error_message
+    assert report.total_records_processed == 661
+    assert report.operator_note is not None
+    assert "row 398" in report.operator_note
+    assert out.exists()
+
+
+def test_rincian_vol_tf_empty_extract_fails_before_writing(tmp_path):
+    """Header-only Vol TF extract (Clairine's RINCIAN_VOL_TF sample) aborts."""
+    path = tmp_path / "RINCIAN_VOL_TF_2026-08-01_empty.csv"
+    path.write_text(
+        "TAHUN|PERIODE|POSISI|REGION|RGDESC|MAINBR|MBDESC|BRANCH|BRDESC|"
+        "PRODUK|MASTERREF|CIFNO|CUST_NAME|GRUP|SEGMEN|DIVISI|CCY|"
+        "AMOUNT_IN_IDR|AMOUNT_ORI|ISSUED_DATE|PNRM|RMNAME\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "should_not_write.xlsx"
+    report = PipelineOrchestrator.execute(
+        ProcessingConfig(
+            raw_data_path=path,
+            workflow_id="rincian-vol-tf",
+            output_report_path=out,
+        )
+    )
+    assert report.success is False
+    assert "empty" in (report.error_message or "").lower()
+    assert not out.exists()
+    title, body = pipeline_failure_dialog(report.error_message)
+    assert title == "Empty file"
+    assert "no data rows" in body.lower()
 
 
 # --------------------------------------------------------------------------- #
@@ -781,6 +903,44 @@ def test_giro_preserves_other_sheets_and_headers(giro_output):
     assert headers == ["NO REK", "JENIS", "SALDO", "SALDO UPDATE"]
 
 
+def test_giro_monthly_recovers_headers_below_a_title_banner(
+    giro_master_file, tmp_path
+):
+    """A monthly workbook with a banner above NO REK / SALDO IDR still updates."""
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Monthly giro extract"])
+    sheet.append(["ignore this banner"])
+    sheet.append([None, None])
+    sheet.append(["NO REK", "SALDO IDR"])
+    sheet.append(["2222222222", 7500])
+    path = tmp_path / "giro_monthly_banner.xlsx"
+    workbook.save(path)
+
+    out = tmp_path / "giro_banner_out.xlsx"
+    report = _run_giro(path, giro_master_file, out)
+    assert report.success is True, report.error_message
+    ws = load_workbook(out)["DAFTAR GIRO"]
+    assert ws.cell(GIRO_ROW_PLAIN, GIRO_SALDO_UPDATE_COL).value == 7500
+
+
+def test_giro_empty_monthly_file_fails(giro_master_file, tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    workbook.active.append(["NO REK", "SALDO IDR"])
+    path = tmp_path / "giro_monthly_empty.xlsx"
+    workbook.save(path)
+    out = tmp_path / "giro_empty_out.xlsx"
+    report = _run_giro(path, giro_master_file, out)
+    assert report.success is False
+    title, body = pipeline_failure_dialog(report.error_message)
+    assert title == "Empty file"
+    assert "no data rows" in body.lower()
+
+
 def _write_giro_master(path: Path, headers: list[str], rows: list[list[object]]) -> Path:
     from openpyxl import Workbook
 
@@ -1006,9 +1166,10 @@ def test_giro_gui_offers_excel_pickers_not_pipe_delimited_labels():
 
 
 def test_other_workflows_keep_the_text_raw_picker():
-    _, title, filetypes = raw_picker_config("akumulasi")
-    assert "pipe-delimited" in title.lower()
-    assert "*.txt" in " ".join(pattern for _, pattern in filetypes)
+    _, _title, filetypes = raw_picker_config("akumulasi")
+    patterns = " ".join(pattern for _, pattern in filetypes)
+    assert "*.txt" in patterns
+    assert "*.xlsx" in patterns
 
 
 def test_giro_exposes_segmen_and_source_filters_like_the_others():
@@ -2421,6 +2582,22 @@ def test_half_unmapped_join_does_not_warn(caplog):
 
 def test_empty_frame_does_not_warn():
     assert warn_if_mostly_unmapped(**_warn_args(unmapped_count=0, total=0)) is False
+
+
+def test_pipeline_failure_dialog_uses_empty_file_title():
+    title, body = pipeline_failure_dialog(
+        "DataIngestionError: The file submitted for processing is empty. "
+        "It has no data rows (only column titles, or nothing at all). "
+        "Nothing was processed."
+    )
+    assert title == "Empty file"
+    assert "no data rows" in body.lower()
+
+
+def test_pipeline_failure_dialog_keeps_other_errors():
+    title, body = pipeline_failure_dialog("WorkflowValidationError: missing MAINBR")
+    assert title == "Pipeline failed"
+    assert "missing MAINBR" in body
 
 
 def test_unmapped_warning_does_not_abort_the_pipeline(

@@ -39,6 +39,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from ..enrichment import canonicalize_join_id, normalize_header, resolve_alias_column
 from ..exporter import PLAIN_INTEGER_FORMAT, ExportError
+from ..ingestion import EMPTY_INPUT_MESSAGE, promote_header_row
 from ..schemas import ProcessingConfig
 from .base import (
     WorkflowDefinition,
@@ -103,10 +104,8 @@ MONTHLY_BALANCE_ALIASES = [
 # JENIS value that is excluded from the update entirely.
 DEPOSITO = "deposito"
 
-# Rows scanned when hunting for the header row, so a master with a title banner
-# above the table still resolves without hardcoded column letters or offsets.
-_HEADER_SCAN_ROWS = 10
-
+# Header detection scans every row so a title banner (or a header inserted
+# in the middle of the values) still resolves without hardcoded offsets.
 _EXCEL_SUFFIXES = (".xlsx", ".xls", ".xlsm")
 
 
@@ -289,11 +288,28 @@ class ReportGiroStrategy(WorkflowStrategy):
                 excel_file = pd.ExcelFile(path)
                 frames = []
                 for sheet_name in excel_file.sheet_names:
-                    frame = pd.read_excel(excel_file, sheet_name=sheet_name, dtype=str)
+                    frame = pd.read_excel(
+                        excel_file, sheet_name=sheet_name, header=None, dtype=str
+                    )
+                    frame, _header_row = promote_header_row(
+                        frame, (*ACCOUNT_ALIASES, *MONTHLY_BALANCE_ALIASES)
+                    )
+                    if frame.empty:
+                        continue
                     frames.append((str(sheet_name), frame))
+                if not frames:
+                    raise WorkflowValidationError(EMPTY_INPUT_MESSAGE)
                 return frames
             if suffix == ".csv":
-                return [("(csv)", pd.read_csv(path, dtype=str))]
+                csv_frame = pd.read_csv(path, header=None, dtype=str)
+                csv_frame, _header_row = promote_header_row(
+                    csv_frame, (*ACCOUNT_ALIASES, *MONTHLY_BALANCE_ALIASES)
+                )
+                if csv_frame.empty:
+                    raise WorkflowValidationError(EMPTY_INPUT_MESSAGE)
+                return [("(csv)", csv_frame)]
+        except WorkflowValidationError:
+            raise
         except Exception as exc:  # noqa: BLE001 - re-wrapped for the caller
             raise WorkflowValidationError(
                 f"Failed to read monthly giro source {path}: {exc}"
@@ -336,7 +352,7 @@ class ReportGiroStrategy(WorkflowStrategy):
         """
         attempts: list[tuple[str, list[str]]] = []
         for worksheet in workbook.worksheets:
-            for header_row in range(1, min(_HEADER_SCAN_ROWS, worksheet.max_row) + 1):
+            for header_row in range(1, worksheet.max_row + 1):
                 headers = self._header_map(worksheet, header_row)
                 if not headers:
                     continue

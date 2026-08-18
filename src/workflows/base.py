@@ -26,7 +26,7 @@ from ..aggregation import (
 )
 from ..enrichment import LOOKUP_KEY_ALIASES, resolve_alias_column
 from ..exporter import PLAIN_INTEGER_FORMAT, ExcelReportExporter
-from ..ingestion import IngestionEngine
+from ..ingestion import IngestionEngine, header_recovery_note
 
 if TYPE_CHECKING:
     from ..schemas import ProcessingConfig
@@ -140,11 +140,13 @@ class WorkflowDefinition:
     # input is a monthly Excel workbook, so the button text, dialog title, and
     # extension filter are declarative rather than hardcoded in the GUI.
     raw_button_label: str = "1. Raw Data File..."
-    raw_picker_title: str = "Select raw pipe-delimited data file"
+    raw_picker_title: str = "Select raw data file (text, CSV, BIN, or Excel)"
     raw_filetypes: tuple[tuple[str, str], ...] = (
         # `.bin` raw extracts (Report Data Statis) are plain delimited text
-        # despite the extension, so they belong in the same filter.
-        ("Text/CSV/BIN", "*.txt *.csv *.bin"),
+        # despite the extension. Excel workbooks are accepted too: operators
+        # sometimes save a pipe extract as .xlsx, or Excel inserts the header
+        # row in the middle of the values.
+        ("Text/CSV/BIN/Excel", "*.txt *.csv *.bin *.xlsx *.xls *.xlsm"),
         ("All files", "*.*"),
     )
     master_button_label: str = "2b. Master Data File..."
@@ -175,6 +177,8 @@ class WorkflowRunResult:
     unmapped_diagnostic: str | None = None
     # Named stage durations for the success dialog (read / match / write).
     stage_timings: dict[str, float] | None = None
+    # Operator-facing note for a recovered input (e.g. headers not on row 1).
+    operator_note: str | None = None
 
 
 class WorkflowStrategy(ABC):
@@ -209,6 +213,7 @@ class WorkflowStrategy(ABC):
         ingestion = IngestionEngine(
             delimiter=config.delimiter,
             numeric_columns=definition.numeric_columns or ("VOLUME_IN_IDR",),
+            header_hints=definition.required_columns,
         )
         ingested = ingestion.read_raw_data(config.raw_data_path)
         data = ingested.data
@@ -263,6 +268,7 @@ class WorkflowStrategy(ABC):
             total_records_processed=ingested.total_rows,
             unmapped_records_count=unmapped_count,
             stage_timings=stages,
+            operator_note=header_recovery_note(ingested.header_row),
         )
 
     # ------------------------------------------------------------------ #

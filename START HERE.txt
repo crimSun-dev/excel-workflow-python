@@ -11,7 +11,7 @@ How to run
 ----------
 1. Double-click TongkatGaibExcel.exe
 2. Select a workflow from the dropdown (listed in daily reporting order)
-3. Select your source file (pipe-delimited .txt / .csv / .bin, or Excel for Giro)
+3. Select your source file (.txt / .csv / .bin, or Excel .xlsx / .xls)
 4. If prompted: select your reference mapping file (.xlsx)
 5. If prompted (Qlola / Giro): select the extra workbook
 6. Choose where to save the output (.xlsx)
@@ -159,6 +159,11 @@ Report Giro writes an updated copy of the master workbook instead of a pivot.
 Troubleshooting
 ---------------
 - Close the output Excel file before running again (can't overwrite an open file)
+- An empty extract (titles only, or nothing at all) pops "Empty file" and
+  does not write a report
+- If column titles are not on the first row - even in the middle of the
+  values - the run still proceeds and the success box says which row
+  they were found on
 - If you see "Pipeline failed", read the error - it lists which columns were found
 - Codes missing from the reference show as UNMAPPED (report still generates)
 - Totals look too low or too high? Check the Summary's "Filter Applied:" line

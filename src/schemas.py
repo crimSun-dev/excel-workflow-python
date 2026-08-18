@@ -116,6 +116,10 @@ class IngestionResult:
     data: pd.DataFrame
     total_rows: int
     malformed_rows_count: int
+    # 1-based row in the original file where column titles were found.
+    # Greater than 1 means titles were not on the first row; values on both
+    # sides of that row are still treated as data.
+    header_row: int = 1
 
 
 @dataclass(frozen=True)
@@ -152,3 +156,5 @@ class PipelineReport:
     unmapped_diagnostic: Optional[str] = None
     # Stage wall times in operator order, e.g. {"read": 0.4, "write": 10.8}.
     stage_timings: Optional[dict[str, float]] = None
+    # Operator-facing note for a recovered input (e.g. headers not on row 1).
+    operator_note: Optional[str] = None

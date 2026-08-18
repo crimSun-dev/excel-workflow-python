@@ -34,7 +34,7 @@ from ..enrichment import (
     warn_if_mostly_unmapped,
 )
 from ..exporter import ExcelReportExporter
-from ..ingestion import IngestionEngine
+from ..ingestion import IngestionEngine, header_recovery_note
 from ..schemas import ProcessingConfig
 from .base import (
     WorkflowDefinition,
@@ -96,6 +96,7 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
         ingestion = IngestionEngine(
             delimiter=config.delimiter,
             numeric_columns=definition.numeric_columns or ("FREKUENSI",),
+            header_hints=definition.required_columns,
         )
         ingested = ingestion.read_raw_data(config.raw_data_path)
         data = ingested.data
@@ -195,6 +196,7 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
             unmapped_records_count=unmapped_count,
             unmapped_warning_emitted=warned,
             unmapped_diagnostic=diagnostic,
+            operator_note=header_recovery_note(ingested.header_row),
         )
 
     @staticmethod
