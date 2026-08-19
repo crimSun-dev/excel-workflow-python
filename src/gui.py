@@ -37,7 +37,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from .branding import PRODUCT_NAME
+from .branding import PRODUCT_NAME, contact_credit_text
 from .orchestrator import PipelineOrchestrator
 from .schemas import PipelineReport, ProcessingConfig
 from .workflows.base import WorkflowId
@@ -230,7 +230,7 @@ def launch_gui() -> None:
 
     root = tk.Tk()
     root.title(PRODUCT_NAME)
-    root.geometry("640x630")
+    root.geometry("640x690")
     root.resizable(False, False)
 
     state: dict[str, Path | None] = {
@@ -400,12 +400,19 @@ def launch_gui() -> None:
 
     pad = {"padx": 10, "pady": 6}
 
-    # --- Product header ---
+    # --- Product header (name + contact credentials) ---
     header = ttk.Frame(root)
-    header.grid(row=0, column=0, columnspan=3, **pad)
+    header.grid(row=0, column=0, columnspan=3, sticky="w", **pad)
     ttk.Label(header, text=PRODUCT_NAME, font=("Segoe UI", 16, "bold")).pack(
         anchor="w"
     )
+    ttk.Label(
+        header,
+        text=contact_credit_text(),
+        font=("Segoe UI", 9),
+        foreground="#555555",
+        justify="left",
+    ).pack(anchor="w", pady=(4, 0))
 
     # --- Workflow selector ---
     ttk.Label(root, text="Workflow:").grid(row=1, column=0, sticky="e", **pad)
