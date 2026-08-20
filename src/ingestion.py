@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from .schemas import IngestionResult
+from .xls_support import open_excel
 
 # Column expected to hold the monetary volume; coerced to float64.
 VOLUME_COLUMN = "VOLUME_IN_IDR"
@@ -234,7 +235,7 @@ class IngestionEngine:
     def _read_excel(self, file_path: Path) -> IngestionResult:
         """Reads .xlsx/.xls/.xlsm with the header row discovered anywhere."""
         try:
-            excel_file = pd.ExcelFile(file_path)
+            excel_file = open_excel(file_path)
         except Exception as exc:  # noqa: BLE001 - re-wrapped for the caller
             raise DataIngestionError(
                 f"Failed to read Excel file {file_path}: {exc}"

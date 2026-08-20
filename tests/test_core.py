@@ -276,3 +276,48 @@ def test_aggregation_applies_segment_filter(raw_pipe_file, reference_file):
     assert result.branch_count == 1
     assert result.summary_data.iloc[0]["MAIN_CODE"] == "MC10"
     assert result.total_volume_idr == 1_500_000_000_000.0
+
+
+def test_xlrd_is_installed_for_legacy_xls():
+    """Giro's original master is .xls; pandas will not read it without xlrd."""
+    import xlrd
+
+    major = int(xlrd.__VERSION__.split(".")[0])
+    assert major >= 2
+
+
+def test_open_excel_uses_xlrd_engine_for_xls(tmp_path, monkeypatch):
+    from src import xls_support
+
+    captured: dict[str, object] = {}
+
+    def fake_excel_file(path, engine=None):
+        captured["engine"] = engine
+        captured["path"] = path
+        return object()
+
+    monkeypatch.setattr(xls_support.pd, "ExcelFile", fake_excel_file)
+    xls_support.open_excel(tmp_path / "DAFTAR REKENING GIRO TSPM.xls")
+    assert captured["engine"] == "xlrd"
+
+
+def test_open_excel_xlsx_leaves_engine_to_pandas(tmp_path, monkeypatch):
+    from src import xls_support
+
+    captured: dict[str, object] = {}
+
+    def fake_excel_file(path, engine=None):
+        captured["engine"] = engine
+        return object()
+
+    monkeypatch.setattr(xls_support.pd, "ExcelFile", fake_excel_file)
+    xls_support.open_excel(tmp_path / "master.xlsx")
+    assert captured["engine"] is None
+
+
+def test_missing_xlrd_tells_operator_to_save_as_xlsx(monkeypatch):
+    from src import xls_support
+
+    monkeypatch.setattr(xls_support, "xlrd", None)
+    with pytest.raises(ModuleNotFoundError, match="Save As"):
+        xls_support.ensure_xlrd()

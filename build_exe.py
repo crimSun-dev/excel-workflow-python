@@ -53,6 +53,8 @@ def build() -> int:
         "--hidden-import",
         "xlrd",
         "--collect-all",
+        "xlrd",
+        "--collect-all",
         "pydantic",
     ]
     for mod in _EXCLUDES:

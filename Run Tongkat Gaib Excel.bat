@@ -47,7 +47,7 @@ if errorlevel 1 goto :error
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 
 :check_packages
-"%PYTHON_EXE%" -c "import pandas, openpyxl, pydantic, typer" >nul 2>&1
+"%PYTHON_EXE%" -c "import pandas, openpyxl, pydantic, typer, xlrd" >nul 2>&1
 if errorlevel 1 (
     echo Installing required packages...
     "%PYTHON_EXE%" -m pip install --upgrade pip setuptools wheel

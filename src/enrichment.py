@@ -24,6 +24,7 @@ from pathlib import Path
 import pandas as pd
 
 from .schemas import EnrichmentResult
+from .xls_support import open_excel
 
 logger = logging.getLogger(__name__)
 
@@ -391,7 +392,7 @@ class ReferenceEnricher:
         raise self._unresolvable_error([("(csv)", list(ref_df.columns))])
 
     def _load_excel_reference(self) -> pd.DataFrame:
-        excel_file = pd.ExcelFile(self.reference_path)
+        excel_file = open_excel(self.reference_path)
         attempts: list[tuple[str, list[str]]] = []
         candidates: list[tuple[int, str, pd.DataFrame, dict[str, str]]] = []
         for sheet_name in excel_file.sheet_names:
@@ -614,7 +615,7 @@ class MasterDataEnricher:
         return df
 
     def _read_excel_sheets(self) -> list[tuple[str, pd.DataFrame]]:
-        excel_file = pd.ExcelFile(self.master_path)
+        excel_file = open_excel(self.master_path)
         frames: list[tuple[str, pd.DataFrame]] = []
         for sheet_name in excel_file.sheet_names:
             df = pd.read_excel(excel_file, sheet_name=sheet_name, dtype=str)

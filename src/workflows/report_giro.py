@@ -41,6 +41,7 @@ from ..enrichment import canonicalize_join_id, normalize_header, resolve_alias_c
 from ..exporter import PLAIN_INTEGER_FORMAT, ExportError
 from ..ingestion import EMPTY_INPUT_MESSAGE, promote_header_row
 from ..schemas import ProcessingConfig
+from ..xls_support import open_excel
 from .base import (
     WorkflowDefinition,
     WorkflowId,
@@ -285,7 +286,7 @@ class ReportGiroStrategy(WorkflowStrategy):
         suffix = path.suffix.lower()
         try:
             if suffix in _EXCEL_SUFFIXES:
-                excel_file = pd.ExcelFile(path)
+                excel_file = open_excel(path)
                 frames = []
                 for sheet_name in excel_file.sheet_names:
                     frame = pd.read_excel(
@@ -469,7 +470,7 @@ class ReportGiroStrategy(WorkflowStrategy):
     def _workbook_from_legacy_xls(self, path: Path) -> Workbook:
         """Copies every sheet of a BIFF8 .xls master into an openpyxl workbook."""
         try:
-            excel_file = pd.ExcelFile(path)
+            excel_file = open_excel(path)
             workbook = Workbook()
             default_sheet = workbook.active
             first = True
