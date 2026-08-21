@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ..branch_order import sort_by_dashboard_order
 from ..enrichment import (
     ID_ALIASES,
     UNMAPPED_SENTINEL,
@@ -63,10 +64,11 @@ TIMESERIES_ACTIVE_USER_QLOLA_DEFINITION = WorkflowDefinition(
     required_columns=("SOURCE", "ID", "FREKUENSI"),
     source_exclude=("CMS",),
     has_source_filter=True,
-    # No default SEGMEN/KW rule, but the fields stay live so an operator can
-    # scope a one-off run; they are a no-op when the extract has no such column.
+    # SEGMENT/SOURCE are the dimensions this extract actually carries; KW is
+    # skipped so a live box cannot imply a filter the report never applies.
     supports_segment_filter=True,
-    has_kw_filter=True,
+    segment_options=("KONSUMER", "MIKRO", "SME"),
+    source_options=("CMS", "QCASH", "QIB"),
 )
 
 
@@ -222,5 +224,9 @@ class TimeSeriesActiveUserQlolaStrategy(WorkflowStrategy):
         counts = counts[USER_AKTIF_CATEGORIES]
         counts = counts.sort_index().reset_index()
         counts.columns = ["MAIN_CODE", *USER_AKTIF_CATEGORIES]
-        return counts
+        # Same paste order as every other report's Summary: the dashboard's
+        # branch sequence, with unlisted codes left in ascending order below it.
+        return sort_by_dashboard_order(
+            counts, "MAIN_CODE", tie_break_columns=("MAIN_CODE",)
+        )
 

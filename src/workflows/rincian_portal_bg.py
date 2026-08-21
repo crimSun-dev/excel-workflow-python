@@ -3,8 +3,8 @@
 No reference enrichment and no default SEGMEN filtering. Groups by
 MAINBR + MBNAME summing AMOUNT_IN_IDR into a tabular integer-formatted report.
 
-The SEGMEN/SOURCE fields are still offered so an operator can filter a one-off
-run; both are a no-op when the raw extract has no such column.
+FILTERS are skipped for this report: the extract has no confirmed SEGMENT /
+SOURCE / KW vocabulary, so the boxes stay grey rather than inviting a guess.
 """
 
 from __future__ import annotations
@@ -21,9 +21,6 @@ RINCIAN_PORTAL_BG_DEFINITION = WorkflowDefinition(
     detail_sheet_name="Detail_Data",
     numeric_columns=("AMOUNT_IN_IDR",),
     required_columns=("MAINBR", "MBNAME", "AMOUNT_IN_IDR"),
-    supports_segment_filter=True,
-    has_source_filter=True,
-    has_kw_filter=True,
 )
 
 

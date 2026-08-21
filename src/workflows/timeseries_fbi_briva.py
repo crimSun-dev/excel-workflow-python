@@ -37,9 +37,10 @@ TIMESERIES_FBI_BRIVA_DEFINITION = WorkflowDefinition(
     # Default inclusion: only NONWHOLESALE rows contribute to the pivot. The
     # operator can widen or clear this from the GUI/CLI for a one-off run.
     segmen_include="NONWHOLESALE",
+    # NONWHOLESALE is the only SEGMEN this extract carries. SOURCE and KW are
+    # skipped; the SEGMENT box is the description of that one keyword.
+    segment_options=("NONWHOLESALE",),
     supports_segment_filter=True,
-    has_source_filter=True,
-    has_kw_filter=True,
     value_display_names=(("VOLUME_IDR", "Sum of VOLUME_IDR"),),
 )
 

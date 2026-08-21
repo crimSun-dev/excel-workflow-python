@@ -107,15 +107,17 @@ listing the sheets scanned and the aliases attempted, and writes no output file.
 
 ### Filter config keys
 
-Four `WorkflowDefinition` keys (`src/workflows/base.py`) hold each workflow's
-filter defaults and declare which controls it exposes.
+These `WorkflowDefinition` keys (`src/workflows/base.py`) hold each workflow's
+filter defaults, declare which controls it exposes, and list the values each
+control offers.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `segmen_include` | `str \| None` | `None` | SEGMEN value to keep, matched case-insensitively after trimming. Only Briva sets one (`NONWHOLESALE`). |
 | `exclude_segmen` | `tuple[str, ...]` | `()` | SEGMEN values dropped before aggregation. Report Data Statis drops `KORPORASI`, Rincian Vol TF drops `Wholesale`. |
 | `source_exclude` | `tuple[str, ...]` | `()` | SOURCE values dropped before enrichment. Only Qlola sets one (`CMS`). |
-| `supports_segment_filter` / `has_source_filter` | `bool` | `False` | Declares that the workflow exposes that control. `True` for every workflow, including Report Giro (which applies them to its monthly source); a disabled field's value is ignored at runtime. |
+| `supports_segment_filter` / `has_source_filter` / `has_kw_filter` | `bool` | `False` | Declares that the workflow exposes that control. Live only where the report has a confirmed vocabulary (Akumulasi/Qlola SEGMENT+SOURCE, Data Statis all three, Vol TF SEGMENT, Briva SEGMENT). A disabled field's value is ignored at runtime. |
+| `segment_options` / `source_options` / `kw_options` | `tuple[str, ...]` | `()` | The values that dimension can hold in this report's extract, shown beside the GUI box and offered in its picker. Presentational only — they never filter anything. `()` means the values were never confirmed, so the box stays free-text. |
 
 At runtime the operator's choice wins over the default. `ProcessingConfig`
 carries three matching overrides — `segmen_filter`, `segmen_exclude`, and
@@ -143,7 +145,19 @@ warning after the run with sample IDs from both sides. The report is still
 written — the warning means "check the master-data file you picked", not
 "the run failed".
 
-**2. Briva totals keep their cents.**
+**2. Summary rows come out in dashboard order.**
+
+Every report's **Summary_Report** lists branches in the dashboard's own
+sequence — Banyuwangi (`7`), Blitar (`9`), Bondowoso (`13`), … Trenggalek
+(`177`), Tulungagung (`110`), Batu (`551`) — so the block pastes straight into
+the dashboard with no re-sorting. Sorting branch codes as text used to produce
+`110, 13, 177, 21`, which lined up with nothing. The sequence lives in
+`src/branch_order.py` (`DASHBOARD_BRANCH_CODES`); a code the dashboard does not
+list (a national extract, `UNMAPPED`, a newly opened unit) is never dropped or
+hidden mid-table — it follows the 25 known branches in ascending order. Report
+Giro is unaffected: it updates a master workbook and writes no Summary.
+
+**3. Briva totals keep their cents.**
 
 The Report Vol Briva Grand Total is stored unrounded with the `#,##0.00`
 format — e.g. `2,481,517,421,603.75`. An operator who rounds the same figure in
@@ -215,6 +229,16 @@ Boxes are never pre-filled, because a filled box reads as something the operator
 must manage and clearing it would read as "remove all filters". Instead each box
 carries a hint (`auto: drops KORPORASI`) stating what the empty state does.
 
+The values themselves are visible rather than remembered. Each box prints the
+list its report accepts (`Choices (3): KONSUMER, MIKRO, SME`) and has a
+**Choose...** ticklist for picking several at once, so a keyword cannot be
+mistyped or confused with a similar one from another report. The lists live on
+the `WorkflowDefinition` (`segment_options`, `source_options`, `kw_options`) and
+filter nothing by themselves — an untouched box is still automatic. A dimension
+the report does not use (Portal BG, Giro, Briva SOURCE/KW, and so on) is greyed
+out with `not used by this report`, so a live box always means the value would
+actually apply.
+
 Every filter is case-insensitive and trimmed, they are AND-combined, and each is
 a **no-op when the extract has no such column** — `KW` is resolved against the
 `KW` header first, then the `PRODUCT`, `GROUP_PRODUCT`, `KAWIL` fallback aliases
@@ -248,11 +272,19 @@ them.
 The **FILTERS** block holds one box each for **SEGMENT**, **SOURCE**, and **KW**.
 All three are cleared every time the dropdown changes, so an empty box always
 means "this report's automatic rules" and no value can carry over between
-workflows; the hint beside each box states what those rules are. They are live
-for every workflow — Report Giro included, where they apply to the monthly
-source and are simply a no-op when that extract has no such column. Input button
+workflows; the hint beside each box states what those rules are. A box the
+selected report does not use is greyed out (`not used by this report`) rather
+than left live as a no-op. Input button
 labels and file-type filters follow the selected workflow, so Report Giro offers
 Excel workbook pickers instead of the text/CSV ones.
+
+When a run fails, the popup leads with what happened and what to do about it —
+"This file does not match the selected report", "The report file is still open",
+"File not found" — and keeps the original technical message underneath for
+whoever supports the tool. The readings live in `src/error_guidance.py`, keyed on
+phrases the raising code owns, and the CLI prints the same three parts. An
+unrecognised failure still gets a title and a next step rather than only an
+exception name.
 
 ## Input format
 
@@ -348,6 +380,8 @@ that runs on a clean Windows machine without Python installed.
 │   ├── ingestion.py      # Text-to-Columns equivalent
 │   ├── enrichment.py     # VLOOKUP equivalent
 │   ├── aggregation.py    # PivotTable equivalent (include/exclude SEGMEN)
+│   ├── branch_order.py   # Dashboard branch sequence for Summary row order
+│   ├── error_guidance.py # Plain-language readings of pipeline failures
 │   ├── exporter.py       # openpyxl styled report writer (parameterized)
 │   ├── orchestrator.py   # Exception boundary + telemetry; dispatches to a workflow
 │   ├── workflows/        # Strategy pattern: WorkflowId, definitions, registry

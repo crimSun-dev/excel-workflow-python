@@ -23,9 +23,8 @@ RINCIAN_VOL_TF_DEFINITION = WorkflowDefinition(
     numeric_columns=("AMOUNT_IN_IDR",),
     required_columns=("SEGMEN", "MAINBR", "MBDESC", "AMOUNT_IN_IDR"),
     exclude_segmen=("Wholesale",),
+    segment_options=("Kecil", "Wholesale"),
     supports_segment_filter=True,
-    has_source_filter=True,
-    has_kw_filter=True,
 )
 
 

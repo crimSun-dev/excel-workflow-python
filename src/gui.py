@@ -13,12 +13,21 @@ Filter semantics, one rule for all three boxes:
   are therefore never pre-filled - a filled box would read as something the
   operator has to manage, and clearing it would read as "remove all filters".
   What each report does automatically is shown as a hint beside the box.
-* **Typed values = keep only those.** A comma-separated keep-list that replaces
-  that dimension's automatic rule for the run.
+* **Typed or picked values = keep only those.** A comma-separated keep-list that
+  replaces that dimension's automatic rule for the run. Every box has a
+  `Choose...` ticklist of the values that report's extract actually carries, and
+  prints the same list beneath itself: the values are meant to be *read off the
+  window*, not recalled from the manual workflow, which is where mistyped
+  keywords came from. Ticking nothing (or clearing the box) is still automatic.
 
 Fields are greyed out only for workflows where the filter cannot apply
 (`supports_segment_filter` / `has_source_filter` / `has_kw_filter`), so a
-disabled box always means exactly "this value would be ignored".
+disabled box always means exactly "this value would be ignored". The `Choose...`
+button additionally greys out where the legal values were never confirmed - the
+box still accepts typed input there.
+
+Failures are read through `error_guidance`, so the popup leads with what
+happened and what to do and keeps the technical message underneath.
 
 Input button labels, dialog titles, and extension filters come from the
 workflow definition, so Report Giro offers two Excel workbook pickers rather
@@ -27,9 +36,10 @@ than the pipe-delimited text labels the other workflows use.
 The small pure helpers below (`source_filter_enabled`, `segment_filter_enabled`,
 `kw_filter_enabled`, `default_source_text`, `default_segmen_include_text`,
 `default_segmen_exclude_text`, `default_kw_text`, `filter_hint_text`,
+`filter_options`, `filter_options_note`, `join_filter_values`,
 `parse_filter_input`, `raw_picker_config`, `master_picker_config`,
-`format_run_time`) hold the fields' behavior so they are testable without a
-display server; `launch_gui` only wires them to widgets.
+`pipeline_failure_dialog`, `format_run_time`) hold the fields' behavior so they
+are testable without a display server; `launch_gui` only wires them to widgets.
 """
 
 from __future__ import annotations
@@ -38,6 +48,7 @@ import threading
 from pathlib import Path
 
 from .branding import PRODUCT_NAME, contact_credit_text
+from .error_guidance import failure_dialog_text
 from .orchestrator import PipelineOrchestrator
 from .schemas import PipelineReport, ProcessingConfig
 from .workflows.base import WorkflowId
@@ -63,8 +74,8 @@ def segment_filter_enabled(workflow_id: WorkflowId | str) -> bool:
     """Whether the SEGMEN fields accept input for this workflow.
 
     Live wherever the workflow can honor them, since which segments to include
-    or exclude is a per-run operator decision; Report Giro applies them to its
-    monthly source like the rest. Greyed out only where the value would be
+    or exclude is a per-run operator decision. Greyed out only where the
+    stakeholder skip-list (or a missing vocabulary) means the value would be
     ignored, so a disabled field always means exactly that.
     """
     return get_definition(workflow_id).supports_segment_filter
@@ -165,6 +176,60 @@ def filter_hint_text(workflow_id: WorkflowId | str, dimension: str) -> str:
     return f"auto: {', '.join(parts)}" if parts else "auto: keeps everything"
 
 
+def filter_options(workflow_id: WorkflowId | str, dimension: str) -> tuple[str, ...]:
+    """The values this report offers for a dimension, or `()` when there are none.
+
+    `()` covers both "the report ignores this dimension" and "the legal values
+    for it were never confirmed" - in either case there is nothing to pick from,
+    so the box stays free-text and the picker button is greyed out.
+    """
+    dimension = dimension.upper()
+    definition = get_definition(workflow_id)
+    if dimension == "SEGMENT":
+        return definition.segment_options if definition.supports_segment_filter else ()
+    if dimension == "SOURCE":
+        return definition.source_options if definition.has_source_filter else ()
+    if dimension == "KW":
+        return definition.kw_options if definition.has_kw_filter else ()
+    raise ValueError(f"Unknown filter dimension: {dimension!r}")
+
+
+def filter_options_note(workflow_id: WorkflowId | str, dimension: str) -> str:
+    """The line under a filter box listing what the operator can choose from.
+
+    The stakeholders' ask was that the keywords be *visible* rather than
+    remembered from the manual workflow, so the values are printed beside the
+    control instead of only living inside the picker popup. A dimension the
+    report ignores says nothing here (its hint already says so), and one whose
+    values were never confirmed says that plainly rather than implying the box
+    is unusable.
+    """
+    dimension = dimension.upper()
+    if not _dimension_enabled(workflow_id, dimension):
+        return ""
+    options = filter_options(workflow_id, dimension)
+    if not options:
+        return f"Choices: any {dimension} value in your file"
+    return f"Choices ({len(options)}): {', '.join(options)}"
+
+
+def _dimension_enabled(workflow_id: WorkflowId | str, dimension: str) -> bool:
+    """Whether the named dimension's control accepts input for this workflow."""
+    dimension = dimension.upper()
+    if dimension == "SEGMENT":
+        return segment_filter_enabled(workflow_id)
+    if dimension == "SOURCE":
+        return source_filter_enabled(workflow_id)
+    if dimension == "KW":
+        return kw_filter_enabled(workflow_id)
+    raise ValueError(f"Unknown filter dimension: {dimension!r}")
+
+
+def join_filter_values(values: list[str] | tuple[str, ...]) -> str:
+    """Renders picked values as the text a filter box holds (`''` = automatic)."""
+    return ", ".join(values)
+
+
 def parse_filter_input(text: str) -> list[str] | None:
     """Turns one filter box into a keep-list, or `None` for "run the defaults".
 
@@ -195,22 +260,14 @@ def unmapped_warning_text(report: PipelineReport) -> str | None:
 
 
 def pipeline_failure_dialog(error_message: str | None) -> tuple[str, str]:
-    """(title, body) for the failure popup, with a dedicated empty-file case.
+    """(title, body) for the failure popup: what happened, what to do, then detail.
 
-    Empty extracts used to finish as a successful 0-row report. The ingest
-    boundary now aborts; this is what makes that abort look like a notice
-    rather than a stack trace.
+    Every failure - not just the empty-extract case that used to be the one
+    special-cased notice - is read through `error_guidance` first, so an
+    operator who has never seen an exception name still learns what to try. The
+    raw message is kept at the bottom for support.
     """
-    message = (error_message or "").strip() or "Unknown error"
-    lowered = message.lower()
-    if "no data rows" in lowered or "file submitted for processing is empty" in lowered:
-        return (
-            "Empty file",
-            "The file submitted for processing is empty.\n\n"
-            "It has no data rows — only column titles, or nothing at all. "
-            "Nothing was processed. Please check the extract and try again.",
-        )
-    return ("Pipeline failed", message)
+    return failure_dialog_text(error_message)
 
 
 def format_run_time(report: PipelineReport) -> str:
@@ -230,7 +287,9 @@ def launch_gui() -> None:
 
     root = tk.Tk()
     root.title(PRODUCT_NAME)
-    root.geometry("640x690")
+    # Taller and wider than the pre-picker window: each filter row now also
+    # prints the values it accepts, and Report Data Statis' KW list is long.
+    root.geometry("780x820")
     root.resizable(False, False)
 
     state: dict[str, Path | None] = {
@@ -258,6 +317,10 @@ def launch_gui() -> None:
     seg_hint_var = tk.StringVar(value="")
     source_hint_var = tk.StringVar(value="")
     kw_hint_var = tk.StringVar(value="")
+    # The visible list of values each box accepts, refreshed per workflow.
+    seg_note_var = tk.StringVar(value="")
+    source_note_var = tk.StringVar(value="")
+    kw_note_var = tk.StringVar(value="")
     status_var = tk.StringVar(value="Ready")
 
     def selected_workflow_id() -> str:
@@ -450,37 +513,124 @@ def launch_gui() -> None:
         row=5, column=1, columnspan=2, **pad
     )
 
+    def choose_values(dimension: str, var: tk.StringVar) -> None:
+        """Ticklist popup for one dimension; ticking nothing means automatic.
+
+        The options come from the *currently selected* workflow rather than
+        being captured when the button was built, so switching reports switches
+        the choices with no rebinding.
+        """
+        workflow_id = selected_workflow_id()
+        options = filter_options(workflow_id, dimension)
+        if not options:
+            return
+        popup = tk.Toplevel(root)
+        popup.title(f"{dimension} filter")
+        popup.transient(root)
+        popup.resizable(False, False)
+        ttk.Label(
+            popup,
+            text=f"Tick the {dimension} values to keep. Tick none to run this "
+            f"report's automatic rule ({filter_hint_text(workflow_id, dimension)}).",
+            wraplength=320,
+            justify="left",
+        ).pack(anchor="w", padx=12, pady=(12, 6))
+        picked = {value.casefold() for value in parse_filter_input(var.get()) or []}
+        # Report Data Statis offers 18 KW values; one column of those would run
+        # off a laptop screen, so long lists wrap into a second column.
+        rows_per_column = 9
+        ticks = ttk.Frame(popup)
+        ticks.pack(anchor="w", padx=18)
+        flags: list[tuple[str, tk.BooleanVar]] = []
+        for index, option in enumerate(options):
+            flag = tk.BooleanVar(value=option.casefold() in picked)
+            ttk.Checkbutton(ticks, text=option, variable=flag).grid(
+                row=index % rows_per_column,
+                column=index // rows_per_column,
+                sticky="w",
+                padx=(0, 12),
+                pady=1,
+            )
+            flags.append((option, flag))
+
+        def confirm() -> None:
+            var.set(join_filter_values([o for o, flag in flags if flag.get()]))
+            popup.destroy()
+
+        def clear() -> None:
+            var.set("")
+            popup.destroy()
+
+        buttons = ttk.Frame(popup)
+        buttons.pack(anchor="e", padx=12, pady=12)
+        ttk.Button(buttons, text="Use automatic", command=clear, width=14).pack(
+            side="left", padx=(0, 6)
+        )
+        ttk.Button(buttons, text="OK", command=confirm, width=10).pack(side="left")
+        popup.grab_set()
+
     # --- FILTERS block: one box per dimension, all three on every report ---
     filters_frame = ttk.LabelFrame(root, text="FILTERS")
     filters_frame.grid(row=6, column=0, columnspan=3, sticky="we", **pad)
     ttk.Label(
         filters_frame,
-        text="Leave a box empty to run this report's automatic rules. "
-        "Type values (comma-separated) to keep only those.",
-        wraplength=560,
+        text="Leave a box empty to run this report's automatic rules. Choose "
+        "values (or type them, comma-separated) to keep only those.",
+        wraplength=680,
         justify="left",
-    ).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(6, 2))
+    ).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(6, 2))
 
-    segment_field_label = ttk.Label(filters_frame, text="SEGMENT:")
-    segment_field_label.grid(row=1, column=0, sticky="e", padx=10, pady=4)
-    segment_entry = ttk.Entry(filters_frame, textvariable=seg_var, width=30)
-    segment_entry.grid(row=1, column=1, sticky="w", padx=4, pady=4)
-    segment_hint_label = ttk.Label(filters_frame, textvariable=seg_hint_var)
-    segment_hint_label.grid(row=1, column=2, sticky="w", padx=6, pady=4)
+    # Each dimension occupies two rows: the control row, and the line listing
+    # every value it can be given - what the stakeholders asked to see without
+    # having to open anything.
+    def build_filter_row(
+        label_text: str,
+        dimension: str,
+        var: tk.StringVar,
+        hint_var: tk.StringVar,
+        note_var: tk.StringVar,
+        row: int,
+        bottom_pad: int,
+    ) -> tuple[ttk.Label, ttk.Entry, ttk.Button]:
+        field_label = ttk.Label(filters_frame, text=label_text)
+        field_label.grid(row=row, column=0, sticky="e", padx=10, pady=4)
+        entry = ttk.Entry(filters_frame, textvariable=var, width=30)
+        entry.grid(row=row, column=1, sticky="w", padx=4, pady=4)
+        button = ttk.Button(
+            filters_frame,
+            text="Choose...",
+            width=11,
+            command=lambda: choose_values(dimension, var),
+        )
+        button.grid(row=row, column=2, sticky="w", padx=4, pady=4)
+        ttk.Label(filters_frame, textvariable=hint_var).grid(
+            row=row, column=3, sticky="w", padx=6, pady=4
+        )
+        ttk.Label(
+            filters_frame,
+            textvariable=note_var,
+            foreground="#555555",
+            wraplength=560,
+            justify="left",
+        ).grid(
+            row=row + 1,
+            column=1,
+            columnspan=3,
+            sticky="w",
+            padx=4,
+            pady=(0, bottom_pad),
+        )
+        return field_label, entry, button
 
-    source_field_label = ttk.Label(filters_frame, text="SOURCE:")
-    source_field_label.grid(row=2, column=0, sticky="e", padx=10, pady=4)
-    source_entry = ttk.Entry(filters_frame, textvariable=source_var, width=30)
-    source_entry.grid(row=2, column=1, sticky="w", padx=4, pady=4)
-    source_hint_label = ttk.Label(filters_frame, textvariable=source_hint_var)
-    source_hint_label.grid(row=2, column=2, sticky="w", padx=6, pady=4)
-
-    kw_field_label = ttk.Label(filters_frame, text="KW:")
-    kw_field_label.grid(row=3, column=0, sticky="e", padx=10, pady=(4, 8))
-    kw_entry = ttk.Entry(filters_frame, textvariable=kw_var, width=30)
-    kw_entry.grid(row=3, column=1, sticky="w", padx=4, pady=(4, 8))
-    kw_hint_label = ttk.Label(filters_frame, textvariable=kw_hint_var)
-    kw_hint_label.grid(row=3, column=2, sticky="w", padx=6, pady=(4, 8))
+    segment_field_label, segment_entry, segment_button = build_filter_row(
+        "SEGMENT:", "SEGMENT", seg_var, seg_hint_var, seg_note_var, 1, 4
+    )
+    source_field_label, source_entry, source_button = build_filter_row(
+        "SOURCE:", "SOURCE", source_var, source_hint_var, source_note_var, 3, 4
+    )
+    kw_field_label, kw_entry, kw_button = build_filter_row(
+        "KW:", "KW", kw_var, kw_hint_var, kw_note_var, 5, 8
+    )
 
     run_button = ttk.Button(root, text="Run Pipeline", command=run, width=22)
     run_button.grid(row=7, column=0, columnspan=3, **pad)
@@ -503,27 +653,47 @@ def launch_gui() -> None:
             var.set("")
         # Greyed out only where the dimension cannot apply, so a disabled field
         # always means the value would be ignored rather than silently discarded.
-        for dimension, enabled, entry, label, hint_var in (
+        for dimension, enabled, entry, label, button, hint_var, note_var in (
             (
                 "SEGMENT",
                 segment_filter_enabled(workflow_id),
                 segment_entry,
                 segment_field_label,
+                segment_button,
                 seg_hint_var,
+                seg_note_var,
             ),
             (
                 "SOURCE",
                 source_filter_enabled(workflow_id),
                 source_entry,
                 source_field_label,
+                source_button,
                 source_hint_var,
+                source_note_var,
             ),
-            ("KW", kw_filter_enabled(workflow_id), kw_entry, kw_field_label, kw_hint_var),
+            (
+                "KW",
+                kw_filter_enabled(workflow_id),
+                kw_entry,
+                kw_field_label,
+                kw_button,
+                kw_hint_var,
+                kw_note_var,
+            ),
         ):
             state_name = "normal" if enabled else "disabled"
             entry.configure(state=state_name)
             label.configure(state=state_name)
             hint_var.set(filter_hint_text(workflow_id, dimension))
+            note_var.set(filter_options_note(workflow_id, dimension))
+            # The picker has nothing to show for a report whose values were
+            # never confirmed, so it greys out rather than opening an empty box.
+            button.configure(
+                state="normal"
+                if enabled and filter_options(workflow_id, dimension)
+                else "disabled"
+            )
         if definition.requires_reference:
             ref_button.grid()
             ref_label.grid()

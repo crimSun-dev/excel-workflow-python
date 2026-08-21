@@ -11,6 +11,7 @@ from typing import Optional
 
 import typer
 
+from .error_guidance import explain_failure
 from .orchestrator import PipelineOrchestrator
 from .schemas import ProcessingConfig
 
@@ -42,8 +43,15 @@ def _print_report(report) -> None:
         typer.echo(f"  Unmapped records   : {report.unmapped_records_count:,}")
         typer.echo(f"  Execution time     : {report.execution_time_seconds}s")
     else:
-        typer.secho("\n[FAILED] Pipeline error.", fg=typer.colors.RED, bold=True)
-        typer.echo(f"  {report.error_message}")
+        # Same reasoning the GUI popup shows, so a terminal run is not the one
+        # place that still reports only the exception text.
+        explanation = explain_failure(report.error_message)
+        typer.secho(
+            f"\n[FAILED] {explanation.title}", fg=typer.colors.RED, bold=True
+        )
+        typer.echo(f"  {explanation.what_happened}")
+        typer.echo(f"  What to do: {explanation.what_to_do}")
+        typer.echo(f"  Details: {report.error_message}")
 
 
 @app.command()

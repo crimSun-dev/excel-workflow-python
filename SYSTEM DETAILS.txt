@@ -171,13 +171,15 @@ boring when something is wrong.
 
   Filters tell the truth
       Empty FILTERS boxes mean "run this report's normal rule".
-      Typed text means "keep only what I typed" — it replaces the
-      normal rule for that run, it does not add to it. Each box
-      shows what the empty state does. The Summary sheet's
-      "Filter Applied:" line states exactly what ran, so a
-      corporate-only cut cannot be mistaken for the normal monthly
-      pack. A filter on a file that has no such column is a no-op;
-      it never crashes the run.
+      Chosen or typed text means "keep only what I picked" — it
+      replaces the normal rule for that run, it does not add to
+      it. Each live box lists the keywords that report accepts
+      and shows what the empty state does. Unused boxes are
+      greyed out. The Summary sheet's "Filter Applied:" line
+      states exactly what ran, so a corporate-only cut cannot
+      be mistaken for the normal monthly pack. A filter on a
+      file that has no such column is a no-op; it never crashes
+      the run.
 
   Two sheets when you need an audit trail
       Pivot reports write Summary_Report plus a row-level detail
@@ -188,9 +190,10 @@ boring when something is wrong.
 
   Failure is an explanation, not a freeze
       Open-file conflicts, missing masters, unreadable workbooks,
-      and unresolvable columns come back as a readable error with
-      enough detail to fix the input. The program does not leave
-      you staring at a blank window.
+      and unresolvable columns come back as a readable explanation
+      (what happened, what to try) with the technical detail
+      underneath for whoever supports the tool. The program does
+      not leave you staring at a blank window or a raw exception.
 
   Proven against the real files, not only tidy examples
       The workflows were built against the actual extracts this
@@ -210,8 +213,9 @@ boring when something is wrong.
   4. Pick the mapping workbook if that report needs one
   5. Pick the extra workbook if that report needs one
      (Qlola master-data, or the giro master)
-  6. Leave FILTERS empty for the normal monthly cut, or type a
-     keep-list to replace that cut for this run only
+  6. Leave FILTERS empty for the normal monthly cut, or use Choose...
+     (or type a keep-list) to replace that cut for this run only.
+     Grey boxes are unused by that report.
   7. Choose where to save the .xlsx
   8. Run Pipeline
   9. Read "Filter Applied:" on the Summary sheet before you send it

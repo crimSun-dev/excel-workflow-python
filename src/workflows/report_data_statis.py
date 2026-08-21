@@ -50,6 +50,28 @@ REPORT_DATA_STATIS_DEFINITION = WorkflowDefinition(
     has_kw_filter=True,
     # The regional cut is a KW keep-list, not a KAWIL dimension of its own.
     kw_include=("KANWIL MALANG",),
+    segment_options=("KONSUMER", "KORPORASI", "MIKRO", "SME"),
+    source_options=("CMS", "QCASH", "QIB"),
+    kw_options=(
+        "Bandung",
+        "Banjarmasin",
+        "Denpasar",
+        "DKI",
+        "DKI2",
+        "KANWIL BANDAR LAMPUNG",
+        "KANWIL JAKARTA 3",
+        "KANWIL JAYAPURA",
+        "KANWIL MALANG",
+        "KANWIL PEKANBARU",
+        "Makassar",
+        "Manado",
+        "Medan",
+        "Padang",
+        "Palembang",
+        "Semarang",
+        "Surabaya",
+        "Yogyakarta",
+    ),
     value_display_names=(("ID_PRODUCT", "Count of ID_PRODUCT"),),
 )
 

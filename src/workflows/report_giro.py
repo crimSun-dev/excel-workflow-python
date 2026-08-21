@@ -148,12 +148,8 @@ REPORT_GIRO_DEFINITION = WorkflowDefinition(
     # Concatenated digits, no thousands separator and no decimals - the same
     # plain-integer look every other report ships (Portal BG / Vol TF).
     number_format=PLAIN_INTEGER_FORMAT,
-    # The monthly source usually carries only NO REK + SALDO IDR, but when it
-    # does have SEGMEN/SOURCE/KW the operator gets the same live controls as the
-    # other reports. Defaults stay empty so nothing is dropped unasked.
-    supports_segment_filter=True,
-    has_source_filter=True,
-    has_kw_filter=True,
+    # No Summary paste and no SEGMENT/SOURCE/KW vocabulary: FILTERS stay grey.
+    # This workflow never applied those columns in execute() anyway.
     raw_button_label="1. Monthly Giro File...",
     raw_picker_title="Select the monthly giro source workbook",
     raw_filetypes=(("Excel Workbook", "*.xlsx *.xls *.xlsm"), ("All files", "*.*")),
@@ -193,9 +189,9 @@ class ReportGiroStrategy(WorkflowStrategy):
             stages[name] = round(perf_counter() - started, 4)
             return perf_counter()
 
-        # 1. Build the monthly {account -> saldo} lookup (VLOOKUP first hit),
-        # honoring the operator's SEGMEN/SOURCE filters where those columns exist.
-        # Every sheet is still scanned; aliases still decide the winning columns.
+        # 1. Build the monthly {account -> saldo} lookup (VLOOKUP first hit).
+        # FILTERS are skipped for this report, so apply_runtime_filters is a
+        # no-op; leftover CLI values cannot change the lookup.
         clock = perf_counter()
         self._emit_progress(config, "Reading monthly source...")
         balances = self._load_monthly_balances(Path(config.raw_data_path), config)
@@ -245,11 +241,10 @@ class ReportGiroStrategy(WorkflowStrategy):
         and a balance column wins. Duplicate accounts keep the first hit,
         matching VLOOKUP.
 
-        The operator's SEGMENT / SOURCE / KW filters are applied to the winning
-        sheet *before* the lookup is built, so a filtered account simply never
-        matches and its master cell is left as it was. A monthly extract without
-        those columns makes the filters a no-op (the Portal BG / Qlola
-        precedent), so typing a filter can never fail a run.
+        The stakeholder skip-list greys FILTERS for this report, so
+        `apply_runtime_filters` is a no-op (the definition flags are off). The
+        call stays so a future opt-in only has to flip those flags. A monthly
+        extract without those columns would also make the filters a no-op.
         """
         if not monthly_path.exists():
             raise WorkflowValidationError(

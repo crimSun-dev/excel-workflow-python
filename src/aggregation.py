@@ -1,7 +1,9 @@
 """Aggregation Engine (TDD Section 3.4).
 
 Replicates Excel's PivotTable: optionally filters by SEGMEN, SOURCE and KW,
-groups by [MAIN_CODE, MAIN_BRANCH], and sums (or counts) the value column.
+groups by [MAIN_CODE, MAIN_BRANCH], and sums (or counts) the value column. Rows
+come out in the dashboard's branch sequence when the caller names the branch-code
+column (see `branch_order`), so the Summary pastes straight into the dashboard.
 Subtotals are intentionally suppressed (matching the tabular-form, no-subtotal
 layout in the source workflow); only a single Grand Total is computed separately
 by the exporter.
@@ -19,6 +21,7 @@ from typing import Literal, Optional, Union
 
 import pandas as pd
 
+from .branch_order import sort_by_dashboard_order
 from .enrichment import resolve_alias_column
 from .schemas import AggregationResult
 
@@ -143,6 +146,7 @@ class AggregationEngine:
         value_col: str = "VOLUME_IN_IDR",
         value_cols: Optional[list[str]] = None,
         aggfunc: AggFunc = "sum",
+        branch_order_col: Optional[str] = None,
     ) -> AggregationResult:
         """Filters, groups, and sums/counts to replicate Excel Pivot Table behavior.
 
@@ -157,6 +161,9 @@ class AggregationEngine:
                 rounding; `"count"` reproduces Excel's Count of a (typically
                 textual) column - the number of non-blank cells per group, with
                 duplicates counted separately and no numeric coercion.
+            branch_order_col: Branch-code column to order the summary rows by the
+                dashboard's fixed branch sequence (see `branch_order`). `None`
+                keeps the plain ascending sort on `group_cols`.
 
         Returns:
             AggregationResult containing the summary table and aggregate metrics.
@@ -210,6 +217,12 @@ class AggregationEngine:
             .sort_values(by=group_cols, ascending=True)
             .reset_index(drop=True)
         )
+        if branch_order_col:
+            # Row order is the paste order: the dashboard's branch sequence,
+            # with any code it does not list keeping the ascending order above.
+            summary = sort_by_dashboard_order(
+                summary, branch_order_col, tie_break_columns=group_cols
+            )
 
         if aggfunc == "count":
             # Counts are exact integers; rounding them would only risk a float

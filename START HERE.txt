@@ -15,19 +15,24 @@ How to run
 4. If prompted: select your reference mapping file (.xlsx)
 5. If prompted (Qlola / Giro): select the extra workbook
 6. Choose where to save the output (.xlsx)
-7. Leave the FILTERS boxes empty for the normal report. Only type in them to
-   narrow this one run - read "FILTERS - HOW TO USE THEM" below first
+7. Leave the FILTERS boxes empty for the normal report. Use Choose... (or
+   type) only to narrow this one run - read "FILTERS - HOW TO USE THEM" first
 8. Click "Run Pipeline"
 
 FILTERS - HOW TO USE THEM (SEGMENT, SOURCE, KW)
 ===============================================
-One box per dimension, shown on every report.
+One box per dimension. A box this report does not use is greyed out
+("not used by this report") so you cannot type a keyword it would ignore.
 
 THE ONE RULE
 ------------
-  Empty box  = automatic. The report applies its own normal rule.
-  Typed text = keep ONLY what you typed, and the report's normal rule is
-               switched OFF for that run.
+  Empty box     = automatic. The report applies its own normal rule.
+  Choose... / typed text = keep ONLY those values, and the report's
+                  normal rule is switched OFF for that run.
+
+Each live box lists the keywords that report accepts
+(e.g. "Choices (3): KONSUMER, MIKRO, SME") and has a Choose... button
+to tick several at once, so you do not have to remember the spelling.
 
 Read that second line carefully. Typing something REPLACES the normal rule,
 it does not add to it. That is the one thing that catches people out - see
@@ -43,7 +48,19 @@ WHAT EACH REPORT DOES WHEN THE BOX IS EMPTY
                         KW:      keeps KANWIL MALANG
   Report Vol Briva      SEGMENT: keeps NONWHOLESALE
   Active User Qlola     SOURCE:  drops CMS
+  Rincian Vol TF        SEGMENT: drops Wholesale
   Every other report    no automatic filtering
+
+WHAT YOU CAN CHOOSE (tick in Choose..., or type)
+------------------------------------------------
+  Akumulasi / Qlola     SEGMENT: KONSUMER, MIKRO, SME
+                        SOURCE:  CMS, QCASH, QIB
+  Report Data Statis    SEGMENT: KONSUMER, KORPORASI, MIKRO, SME
+                        SOURCE:  CMS, QCASH, QIB
+                        KW:      18 regions (Bandung … Yogyakarta)
+  Rincian Vol TF        SEGMENT: Kecil, Wholesale
+  Report Vol Briva      SEGMENT: NONWHOLESALE
+  Portal BG / Giro      none - those boxes stay grey
 
 THE KORPORASI TRAP
 ------------------
@@ -137,9 +154,8 @@ missing from the monthly file are left blank. Historical SALDO is never
 changed. Balances are written as plain whole numbers (format 0) -
 concatenated digits, no commas and no decimal point.
 
-The FILTERS boxes work here too: they filter the monthly source, so a
-filtered-out account keeps whatever its master cell already had. If your monthly
-file only has NO REK and SALDO IDR, they simply do nothing.
+FILTERS are not used on Report Giro (the boxes stay grey). This workflow
+updates account balances; it does not cut a pivot by SEGMENT / SOURCE / KW.
 
 Reference file column names
 ---------------------------
@@ -164,7 +180,10 @@ Troubleshooting
 - If column titles are not on the first row - even in the middle of the
   values - the run still proceeds and the success box says which row
   they were found on
-- If you see "Pipeline failed", read the error - it lists which columns were found
+- If a run fails, the popup says what happened and what to do, with the
+  technical detail underneath for whoever supports the tool
+- Summary rows (every report except Giro) already follow the dashboard
+  branch order, so you can paste MAIN_CODE / amounts straight in
 - Codes missing from the reference show as UNMAPPED (report still generates)
 - Totals look too low or too high? Check the Summary's "Filter Applied:" line
   before anything else - a typed filter box keeps ONLY what you typed. See

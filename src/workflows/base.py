@@ -95,10 +95,10 @@ class WorkflowDefinition:
     # Default SEGMEN values to drop (e.g. Report Data Statis drops KORPORASI).
     # A runtime `ProcessingConfig.segmen_exclude` overrides this default.
     exclude_segmen: tuple[str, ...] = ()
-    # Whether this workflow exposes the SEGMENT filter control. True for every
-    # workflow that can honor it - including Report Giro, which applies it to
-    # its monthly source. False greys the field out, so a disabled field always
-    # means "this value would be ignored".
+    # Whether this workflow exposes the SEGMENT filter control. True only where
+    # the report has a confirmed SEGMENT vocabulary (or Briva's single
+    # NONWHOLESALE keyword). False greys the field out, so a disabled field
+    # always means "this value would be ignored".
     supports_segment_filter: bool = False
     # Default SEGMEN inclusion filter (e.g. Briva keeps only NONWHOLESALE).
     # Applies whenever the operator leaves the SEGMENT box empty; distinct from
@@ -151,6 +151,28 @@ class WorkflowDefinition:
     )
     master_button_label: str = "2b. Master Data File..."
     master_picker_title: str = "Select master-data workbook (ID -> MAIN_CODE)"
+
+    # ---- Filter choices (GUI) ----------------------------------------------
+    # The values this report's extract actually carries in each dimension, as
+    # confirmed by the stakeholders against their pivot tables. They are what
+    # the operator picks from instead of recalling keywords from the manual
+    # workflow, and they never filter anything by themselves: an untouched box
+    # is still "automatic". An empty tuple means the legal values are not known
+    # for this report, so the box stays free-text.
+    segment_options: tuple[str, ...] = ()
+    source_options: tuple[str, ...] = ()
+    kw_options: tuple[str, ...] = ()
+
+    @property
+    def branch_order_column(self) -> str | None:
+        """Summary column holding the branch code, or None if there is none.
+
+        The first group column is the branch code in every report that produces
+        a branch summary (`MAIN_CODE`, or `MAINBR` for the Rincian pair), which
+        is what the dashboard sequence is keyed on. Report Giro groups nothing
+        and writes no Summary, so it gets None and is left alone.
+        """
+        return self.group_cols[0] if self.group_cols else None
 
     @property
     def resolved_value_cols(self) -> tuple[str, ...]:
@@ -242,6 +264,7 @@ class WorkflowStrategy(ABC):
             value_col=definition.value_col,
             value_cols=list(definition.resolved_value_cols),
             aggfunc=definition.aggfunc,
+            branch_order_col=definition.branch_order_column,
         )
 
         self._emit_progress(config, "Writing Excel...")

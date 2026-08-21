@@ -148,6 +148,32 @@ def reference_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def akumulasi_dashboard_order_files(tmp_path: Path) -> tuple[Path, Path]:
+    """Akumulasi raw + reference whose branch codes fight the dashboard order.
+
+    Sorted as text these codes read 110, 13, 7 - which is how the Summary used
+    to come out; the dashboard reads 7, 13, 110.
+    """
+    raw = tmp_path / "akumulasi_dashboard_order.csv"
+    raw.write_text(
+        "KODE_UKER|SEGMEN|FBI|VOLUME_IN_IDR\n"
+        "U110|KONSUMER|10|1000\n"
+        "U13|KONSUMER|20|2000\n"
+        "U7|KONSUMER|30|3000\n",
+        encoding="utf-8",
+    )
+    reference = tmp_path / "akumulasi_dashboard_order_reference.xlsx"
+    pd.DataFrame(
+        {
+            "KODE_UKER": ["U7", "U13", "U110"],
+            "MAIN_CODE": ["7", "13", "110"],
+            "MAIN_BRANCH": ["KC Banyuwangi", "KC Bondowoso", "KC Tulungagung"],
+        }
+    ).to_excel(reference, index=False)
+    return raw, reference
+
+
+@pytest.fixture
 def reference_file_kanca(tmp_path: Path) -> Path:
     """Reference workbook using aliased headers instead of canonical names.
 
