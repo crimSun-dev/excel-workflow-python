@@ -1,195 +1,266 @@
 Tongkat Gaib Excel
 ========================
+How to run each report
 
-No Python install needed - just double-click TongkatGaibExcel.exe
+If this is your first time: unzip the folder, then double-click
+TongkatGaibExcel.exe. You do not need to install Python.
 
-Read SYSTEM DETAILS.txt for the full product explanation (what you bought,
-why the reports are built this way, and the proprietary license). This file
-is the operator guide.
+PC requirements (Windows version, memory, Excel) are in SYSTEM DETAILS.txt.
 
-How to run
-----------
+If something looks wrong after a run, read "After you click Run" at the
+bottom of this file before sending the workbook on.
+
+
+First run (every report)
+------------------------
 1. Double-click TongkatGaibExcel.exe
-2. Select a workflow from the dropdown (listed in daily reporting order)
-3. Select your source file (.txt / .csv / .bin, or Excel .xlsx / .xls)
-4. If prompted: select your reference mapping file (.xlsx)
-5. If prompted (Qlola / Giro): select the extra workbook
-6. Choose where to save the output (.xlsx)
-7. Leave the FILTERS boxes empty for the normal report. Use Choose... (or
-   type) only to narrow this one run - read "FILTERS - HOW TO USE THEM" first
-8. Click "Run Pipeline"
+2. Pick a report from the dropdown
+3. Pick the source file the program asks for
+4. If a mapping / master button lights up, pick that file too
+5. Leave FILTERS empty for the usual monthly report
+6. Choose where to save the .xlsx
+7. Click Run Pipeline
+8. On pivot reports, check the Summary line "Filter Applied:" before you
+   use the numbers
 
-FILTERS - HOW TO USE THEM (SEGMENT, SOURCE, KW)
-===============================================
-One box per dimension. A box this report does not use is greyed out
-("not used by this report") so you cannot type a keyword it would ignore.
+Greyed-out buttons and grey FILTERS boxes are unused by that report.
+They are not broken.
 
-THE ONE RULE
-------------
-  Empty box     = automatic. The report applies its own normal rule.
-  Choose... / typed text = keep ONLY those values, and the report's
-                  normal rule is switched OFF for that run.
 
-Each live box lists the keywords that report accepts
-(e.g. "Choices (3): KONSUMER, MIKRO, SME") and has a Choose... button
-to tick several at once, so you do not have to remember the spelling.
+What each report needs
+----------------------
+  #  Report                         Files you pick
+  -- ------------------------------ ------------------------------------------
+  1  Report Summary Akumulasi       source + UKER / branch mapping
+  2  Time Series Active User Qlola  source + mapping + master-data workbook
+  3  Report Data Statis             source (often a .bin) + mapping
+  4  Rincian Vol TF                 source only
+  5  Rincian Portal BG              source only
+  6  Report Vol Briva               source + mapping
+  7  Report Giro                    monthly giro workbook + giro master
+                                    (no mapping file)
 
-Read that second line carefully. Typing something REPLACES the normal rule,
-it does not add to it. That is the one thing that catches people out - see
-"The KORPORASI trap" below.
+Source files are usually .txt / .csv / .bin. Excel .xlsx / .xls is also
+accepted. Report Giro uses Excel workbooks on both sides.
 
-Each box shows what it does when left empty, e.g. "auto: drops KORPORASI",
-so you never have to type the normal rule yourself, and you never have to
-clear a box to get it.
+Your original files are only read. The program writes a new file to the
+save path you chose.
 
-WHAT EACH REPORT DOES WHEN THE BOX IS EMPTY
--------------------------------------------
-  Report Data Statis    SEGMENT: drops KORPORASI
-                        KW:      keeps KANWIL MALANG
-  Report Vol Briva      SEGMENT: keeps NONWHOLESALE
-  Active User Qlola     SOURCE:  drops CMS
-  Rincian Vol TF        SEGMENT: drops Wholesale
-  Every other report    no automatic filtering
 
-WHAT YOU CAN CHOOSE (tick in Choose..., or type)
-------------------------------------------------
-  Akumulasi / Qlola     SEGMENT: KONSUMER, MIKRO, SME
-                        SOURCE:  CMS, QCASH, QIB
-  Report Data Statis    SEGMENT: KONSUMER, KORPORASI, MIKRO, SME
-                        SOURCE:  CMS, QCASH, QIB
-                        KW:      18 regions (Bandung … Yogyakarta)
-  Rincian Vol TF        SEGMENT: Kecil, Wholesale
-  Report Vol Briva      SEGMENT: NONWHOLESALE
-  Portal BG / Giro      none - those boxes stay grey
+FILTERS (SEGMENT, SOURCE, KW)
+=============================
+One box per dimension. A box this report does not use stays grey
+("not used by this report").
 
-THE KORPORASI TRAP
-------------------
-Typing KORPORASI in the SEGMENT box does NOT mean "add corporate back in".
-It means "show me KORPORASI and nothing else".
+  Empty box              = automatic. That report's usual monthly rule.
+  Choose... / typed text = keep ONLY those values. The usual rule for
+                           that box is switched OFF for this run.
 
-  SEGMENT empty        ->  everyone EXCEPT corporate   (the normal report)
-  SEGMENT "KORPORASI"  ->  corporate ONLY
+Typing does not "add" a value on top of the usual report. It replaces
+the usual rule. That is the part that catches people out — see
+"The KORPORASI trap" under Report Data Statis.
 
-Both are valid reports, but they are very different numbers. If you want
-the full population WITH corporate included, you have to list every segment
-you want to see, for example:
-
-  KORPORASI, RITEL, KONSUMER, MIKRO
-
-There is no "keep everything" shortcut: an empty box gives you the report's
-normal rule, not everything. The same logic applies to the SOURCE and KW
+Each live box lists the keywords that report accepts, and has Choose...
+so you do not have to remember spelling. Switching report clears the
 boxes.
 
-RECIPES
--------
-  Normal monthly report      leave all three boxes empty
-  Corporate-only cut         SEGMENT: KORPORASI
-  Two segments together      SEGMENT: RITEL, KORPORASI
-  A different region         KW: KANWIL SURABAYA
-  Only one channel           SOURCE: the channel name
+Comma-separated for several values. Upper/lower case and extra spaces
+do not matter. If your file has no such column, that filter does
+nothing — the run still finishes.
 
-ALWAYS CHECK WHAT ACTUALLY RAN
-------------------------------
-The Summary sheet has a "Filter Applied:" line near the top, and it states
-exactly what that run used. For Report Data Statis:
 
-  KORPORASI (excluded); KANWIL MALANG (KW only)   <- the normal report
-  KORPORASI (only); KANWIL MALANG (KW only)       <- a corporate-only cut
-
-If that line does not say what you expected, the numbers will not either.
-Check it before sending a report on.
-
-SMALL PRINT
------------
-- Comma-separated for several values.
-- Matching ignores upper/lower case and extra spaces.
-- If your file has no such column the filter simply does nothing - it can
-  never fail the run.
-- Switching workflow clears all three boxes.
-
-Workflows (dropdown order)
---------------------------
-1. Report Summary Akumulasi (needs reference mapping)
-2. Time Series Active User Qlola (needs reference + master data)
-3. Report Data Statis (needs reference mapping; raw may be a .bin extract)
-4. Rincian Vol TF
-5. Rincian Portal BG
-6. Report Vol Briva (needs reference mapping)
-7. Report Giro (needs monthly giro workbook + giro master; no reference mapping)
-
-Qlola (Workflow 2) — three input files
---------------------------------------
-1. Raw pipe-delimited .csv (SOURCE, ID, FREKUENSI, KODE_UKER, ...)
-2. UKER reference workbook (KODE_UKER -> MAIN_CODE for detail only)
-3. Master-data workbook (ID -> MAIN_CODE for the Summary pivot)
-
-For ``MASTER DATA STATIS MALANG`` workbooks, the Qlola user ID lives in the
-``ID_PRODUCT`` column (not ``CIF``). The Summary counts users by the master
-``MAIN CODE`` after VLOOKUP on ID — same as manual Excel step 4.
-
-Report Data Statis (Workflow 3)
--------------------------------
-Raw is pipe-delimited (often a .bin extract). Needs a UKER/unit mapping
-workbook. Your file needs a KW column - that is where the region lives.
-Reports Count of ID_PRODUCT per branch.
-
-With all boxes empty it keeps KW = KANWIL MALANG and drops SEGMEN KORPORASI.
-To report a different region for one run, type it in the KW box. Before you
-touch the SEGMENT box, read "The KORPORASI trap" above: typing KORPORASI
-gives you a corporate-ONLY report, not the normal report with corporate
-added back in.
-
-Report Giro (Workflow 7) — two Excel workbooks
-----------------------------------------------
-1. Monthly giro source workbook (NO REK + SALDO IDR)
-2. Giro master workbook. The original list is enough, for example
-   DAFTAR REKENING GIRO TSPM.xls with JENIS, NO REK, PRODUK, OPEN DATE,
-   SALDO. If SALDO UPDATE is missing, the program adds it. If the file
-   already has SALDO UPDATE or a month column such as SALDO JUNI, that
-   existing column is filled instead.
-
-The master you pick is never overwritten. The updated copy is saved as
-.xlsx to the output path you choose. Deposito rows are skipped. Accounts
-missing from the monthly file are left blank. Historical SALDO is never
-changed. Balances are written as plain whole numbers (format 0) -
-concatenated digits, no commas and no decimal point.
-
-FILTERS are not used on Report Giro (the boxes stay grey). This workflow
-updates account balances; it does not cut a pivot by SEGMENT / SOURCE / KW.
-
-Reference file column names
+1. Report Summary Akumulasi
 ---------------------------
-The program accepts common alternate headers (not only KODE_UKER):
+What it does
+  Totals FBI and volume (VOLUME_IN_IDR) by branch.
 
-  Branch lookup:  KODE_UKER, KODE UNIT, KANCA, KODE SUB KANCA, KODE KANCA, UKER, KODE UKER
-  Branch code:    MAIN_CODE, MAIN CODE, KODE, KODE KANCA, KODE UNIT, UNIQUE CODE, KODE INDUK
-  Branch name:    MAIN_BRANCH, MAIN BRANCH, BRANCH, DESC KANCA, DESC UNIT, SUB KANCA, NAMA UKER, DESCRIPTION
+What you process
+  A pipe-delimited extract plus the UKER / branch mapping workbook.
 
-Multi-sheet Excel files are supported - it scans sheets until it finds a match.
+What is unique
+  Needs mapping. No automatic SEGMENT / SOURCE / KW cut when the boxes
+  are empty — you get every row the extract has.
 
-Output
-------
-Creates an Excel report with a Summary sheet (and detail/audit data as applicable).
-Report Giro writes an updated copy of the master workbook instead of a pivot.
+FILTERS (live)
+  SEGMENT: KONSUMER, MIKRO, SME
+  SOURCE:  CMS, QCASH, QIB
+  KW:      grey
 
-Troubleshooting
----------------
-- Close the output Excel file before running again (can't overwrite an open file)
-- An empty extract (titles only, or nothing at all) pops "Empty file" and
-  does not write a report
-- If column titles are not on the first row - even in the middle of the
-  values - the run still proceeds and the success box says which row
-  they were found on
-- If a run fails, the popup says what happened and what to do, with the
-  technical detail underneath for whoever supports the tool
-- Summary rows (every report except Giro) already follow the dashboard
-  branch order, so you can paste MAIN_CODE / amounts straight in
-- Codes missing from the reference show as UNMAPPED (report still generates)
-- Totals look too low or too high? Check the Summary's "Filter Applied:" line
-  before anything else - a typed filter box keeps ONLY what you typed. See
-  "FILTERS - HOW TO USE THEM" above.
+Usual monthly run: leave the boxes empty.
 
-Sample raw data format (your .txt / .csv file should look like this):
+
+2. Time Series Active User Qlola
+--------------------------------
+What it does
+  Counts distinct users as active (frequency at least 5) vs not, by
+  branch.
+
+What you process
+  Three files:
+    1. Raw pipe-delimited .csv (SOURCE, ID, FREKUENSI, KODE_UKER, ...)
+    2. UKER mapping workbook (used on the detail sheet)
+    3. Master-data workbook (user ID -> branch for the Summary)
+
+  On MASTER DATA STATIS MALANG workbooks the user ID is in ID_PRODUCT
+  (not CIF). Summary counts users the master can map. Unmapped IDs stay
+  on the detail sheet.
+
+What is unique
+  Needs mapping AND master data. Empty SOURCE box drops CMS
+  automatically.
+
+FILTERS (live)
+  SEGMENT: KONSUMER, MIKRO, SME
+  SOURCE:  CMS, QCASH, QIB     (empty = drop CMS)
+  KW:      grey
+
+Usual monthly run: leave the boxes empty.
+
+
+3. Report Data Statis
+---------------------
+What it does
+  Counts ID_PRODUCT per branch.
+
+What you process
+  A pipe-delimited extract (often saved as .bin) plus the UKER mapping.
+  The region lives in a KW column.
+
+What is unique
+  Empty SEGMENT drops KORPORASI. Empty KW keeps KANWIL MALANG.
+  This is the only report with a live KW box.
+
+FILTERS (live)
+  SEGMENT: KONSUMER, KORPORASI, MIKRO, SME
+  SOURCE:  CMS, QCASH, QIB
+  KW:      18 regions (Bandung, Banjarmasin, Denpasar, DKI, DKI2,
+           KANWIL BANDAR LAMPUNG, KANWIL JAKARTA 3, KANWIL JAYAPURA,
+           KANWIL MALANG, KANWIL PEKANBARU, Makassar, Manado, Medan,
+           Padang, Palembang, Semarang, Surabaya, Yogyakarta)
+
+Usual monthly run: leave all three boxes empty.
+
+The KORPORASI trap
+  Typing KORPORASI in SEGMENT does NOT mean "add corporate back in".
+  It means "show me KORPORASI and nothing else".
+
+    SEGMENT empty        -> everyone EXCEPT corporate  (usual report)
+    SEGMENT "KORPORASI"  -> corporate ONLY
+
+  To include corporate together with other segments, list every segment
+  you want, for example: KORPORASI, KONSUMER, MIKRO, SME
+  There is no "keep everything" shortcut: empty means the usual rule,
+  not everything.
+
+  A different region for one run: type or Choose... that KW value.
+
+
+4. Rincian Vol TF
+-----------------
+What it does
+  Totals AMOUNT_IN_IDR by branch.
+
+What you process
+  The volume extract only. No mapping workbook.
+
+What is unique
+  Empty SEGMENT drops Wholesale.
+
+FILTERS (live)
+  SEGMENT: Kecil, Wholesale     (empty = drop Wholesale)
+  SOURCE / KW: grey
+
+Usual monthly run: leave SEGMENT empty.
+
+
+5. Rincian Portal BG
+--------------------
+What it does
+  Totals AMOUNT_IN_IDR by branch.
+
+What you process
+  The Portal BG extract only. No mapping workbook.
+
+What is unique
+  No automatic cut. FILTERS stay grey — this report has no SEGMENT /
+  SOURCE / KW choices to pick.
+
+Usual monthly run: pick the file, save, Run Pipeline.
+
+
+6. Report Vol Briva
+-------------------
+What it does
+  Totals BRIVA volume (VOLUME_IDR) by branch. Each row is rounded up
+  before summing. The Grand Total keeps cents so you can ROUND later
+  in Excel if you want.
+
+What you process
+  The BRIVA extract plus the UKER mapping.
+
+What is unique
+  Empty SEGMENT keeps NONWHOLESALE only.
+
+FILTERS (live)
+  SEGMENT: NONWHOLESALE         (empty = keep NONWHOLESALE)
+  SOURCE / KW: grey
+
+Usual monthly run: leave SEGMENT empty.
+
+
+7. Report Giro
+--------------
+What it does
+  Copies this month's IDR balance onto each account in the giro master
+  and saves a new copy. This is not a pivot.
+
+What you process
+  Two Excel workbooks:
+    1. Monthly giro file (account number + SALDO IDR)
+    2. Giro master (the original list is enough, for example
+       DAFTAR REKENING GIRO TSPM.xls with JENIS, NO REK, PRODUK,
+       OPEN DATE, SALDO)
+
+  If SALDO UPDATE is missing, the program adds it. If the file already
+  has SALDO UPDATE or a month column such as SALDO JUNI, that existing
+  column is filled instead.
+
+What is unique
+  No mapping file. FILTERS stay grey.
+  The master you pick is never overwritten. Deposito rows are skipped.
+  Accounts missing from the monthly file stay blank. Historical SALDO
+  is never changed. Balances are whole numbers with no commas.
+
+Usual monthly run: pick both workbooks, choose the save path, Run.
+
+
+After you click Run
+-------------------
+Pivot reports (everything except Giro) write a Summary sheet plus a
+detail sheet. Summary rows follow the usual dashboard branch order so
+you can paste codes and amounts. Codes missing from the mapping show
+as UNMAPPED; the report still generates.
+
+Always read "Filter Applied:" on the Summary. For Report Data Statis:
+
+  KORPORASI (excluded); KANWIL MALANG (KW only)   <- usual report
+  KORPORASI (only); KANWIL MALANG (KW only)       <- corporate-only cut
+
+If that line is not what you meant, the numbers will not be either.
+
+If a run fails, the popup says what happened and what to try. Common
+fixes:
+  - Close the output Excel file before running again
+    (Windows will not overwrite an open file)
+  - An empty extract (titles only, or nothing at all) pops "Empty file"
+    and does not write a report
+  - Column titles do not have to sit on the first row
+  - Qlola Summary smaller than a hand pivot: unmapped IDs are left out
+    of Summary on purpose; they are still on the detail sheet
+  - Giro grew a new column: normal when you started from the original
+    five-column register. SALDO is history. SALDO UPDATE is the fill
+
+Typical source layout (text / csv / bin):
 
   KODE_UKER|SEGMEN|VOLUME_IN_IDR
   0001|Wholesale|1250000000000
